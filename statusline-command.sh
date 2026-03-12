@@ -99,11 +99,20 @@ git_branch=$(git -C "$cwd" branch --show-current 2>/dev/null || echo "")
 
 # Git status
 if [ -n "$git_branch" ]; then
-  if git -C "$cwd" diff --quiet HEAD 2>/dev/null && git -C "$cwd" diff --cached --quiet HEAD 2>/dev/null && [ -z "$(git -C "$cwd" ls-files --others --exclude-standard 2>/dev/null)" ]; then
-    git_status="\xe2\x9c\x93"
-  else
-    git_status="\xe2\x9c\x97"
-  fi
+  # Commits ahead of remote
+  ahead=$(git -C "$cwd" rev-list --count @{upstream}..HEAD 2>/dev/null || echo "0")
+  # Working tree + staged file counts
+  added=$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c '^[?A]')
+  modified=$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c '^.\?M')
+  deleted=$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c '^.\?D')
+
+  git_status=""
+  [ "$ahead" -gt 0 ] 2>/dev/null && git_status+="\x1b[33m\xef\x85\xb6 ${ahead}\x1b[0m "
+  [ "$added" -gt 0 ] 2>/dev/null && git_status+="\x1b[32m\xef\x81\x86 ${added}\x1b[0m "
+  [ "$modified" -gt 0 ] 2>/dev/null && git_status+="\x1b[34m\xef\x81\x84 ${modified}\x1b[0m "
+  [ "$deleted" -gt 0 ] 2>/dev/null && git_status+="\x1b[31m\xef\x85\x87 ${deleted}\x1b[0m "
+  git_status="${git_status% }"
+  [ -z "$git_status" ] && git_status="\x1b[32m\xe2\x9c\x93\x1b[0m"
   # Worktree info
   wt_name=$(echo "$input" | jq -r '.worktree.name // ""')
   wt_branch=$(echo "$input" | jq -r '.worktree.branch // ""')
