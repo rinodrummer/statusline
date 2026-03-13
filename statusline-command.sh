@@ -134,6 +134,43 @@ else
   git_part=""
 fi
 
+# IDE detection
+ide_icon=""
+ide_name=""
+if [ "$TERM_PROGRAM" = "vscode" ]; then
+  ide_icon="\xee\xa3\x9a"  # nf-dev-vscode
+  ide_name="VS Code"
+elif [ "$TERM_PROGRAM" = "cursor" ]; then
+  ide_icon="\xef\x84\xa1"  # nf-fa-code (fallback)
+  ide_name="Cursor"
+elif [ "$TERM_PROGRAM" = "windsurf" ]; then
+  ide_icon="\xef\x84\xa1"  # nf-fa-code (fallback)
+  ide_name="Windsurf"
+elif [ "$TERMINAL_EMULATOR" = "JetBrains-JetbrainsIde" ]; then
+  jb_hist="${__INTELLIJ_COMMAND_HISTFILE__:-}"
+  case "$jb_hist" in
+    *IntelliJIdea*) ide_icon="\xee\x9e\xb5"; ide_name="IntelliJ" ;;    # nf-dev-intellij
+    *PhpStorm*)     ide_icon="\xee\xa1\xa2"; ide_name="PhpStorm" ;;     # nf-dev-phpstorm
+    *WebStorm*)     ide_icon="\xee\xa3\xa4"; ide_name="WebStorm" ;;     # nf-dev-webstorm
+    *PyCharm*)      ide_icon="\xee\xa1\xb7"; ide_name="PyCharm" ;;      # nf-dev-pycharm
+    *RubyMine*)     ide_icon="\xee\xa2\x96"; ide_name="RubyMine" ;;     # nf-dev-rubymine
+    *Rider*)        ide_icon="\xee\xa2\x8f"; ide_name="Rider" ;;        # nf-dev-rider
+    *CLion*)        ide_icon="\xee\x9e\x8e"; ide_name="CLion" ;;        # nf-dev-clion
+    *GoLand*)       ide_icon="\xee\x9f\xaf"; ide_name="GoLand" ;;       # nf-dev-goland
+    *DataGrip*)     ide_icon="\xee\x9e\xbd"; ide_name="DataGrip" ;;     # nf-dev-datagrip
+    *)              ide_icon="\xee\xa0\x88"; ide_name="JetBrains" ;;     # nf-dev-jetbrains
+  esac
+else
+  ide_icon="\xee\x9d\xa0"  # nf-dev-bash
+  ide_name=""
+fi
+
+if [ -n "$ide_name" ]; then
+  ide_part=" ${ide_icon} \x1b[2;37m${ide_name}\x1b[0m"
+else
+  ide_part=" ${ide_icon}"
+fi
+
 # Agent name (if running as an agent)
 agent_name=$(echo "$input" | jq -r '.agent.name // ""')
 if [ -n "$agent_name" ]; then
@@ -142,8 +179,8 @@ else
   agent_part=""
 fi
 
-# Line 1: <Agent name> [Model / Context | Progress bar] <Folder icon> <Dir name> + <added dirs>
-printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m] \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
+# Line 1: <Agent name> [Model / Context | Progress bar] <Folder icon> <Dir name> + <added dirs> <IDE icon> <IDE name>
+printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m] \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}${ide_part}\n" \
   "$model_display" "$pct" "$context_fmt" "$dir_name"
 # Line 2: <Project name> <Git section> <Clock icon> <start time (duration)>
 clock_icon="\xef\x80\x97"
