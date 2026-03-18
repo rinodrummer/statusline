@@ -20,16 +20,33 @@ else
   context_fmt="$context_size"
 fi
 
+# Platform detection
+_os=$(uname -s)
+
 # Session start time and duration
 if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-  start_epoch=$(stat -c '%W' "$transcript_path" 2>/dev/null)
+  if [ "$_os" = "Darwin" ]; then
+    start_epoch=$(stat -f '%B' "$transcript_path" 2>/dev/null)
+  else
+    start_epoch=$(stat -c '%W' "$transcript_path" 2>/dev/null)
+  fi
   if [ -n "$start_epoch" ] && [ "$start_epoch" -gt 0 ] 2>/dev/null; then
-    start_date=$(date -d "@$start_epoch" '+%d/%m/%Y')
-    today=$(date '+%d/%m/%Y')
-    if [ "$start_date" = "$today" ]; then
-      start_time=$(date -d "@$start_epoch" '+%H:%M')
+    if [ "$_os" = "Darwin" ]; then
+      start_date=$(date -r "$start_epoch" '+%d/%m/%Y')
+      today=$(date '+%d/%m/%Y')
+      if [ "$start_date" = "$today" ]; then
+        start_time=$(date -r "$start_epoch" '+%H:%M')
+      else
+        start_time="${start_date} $(date -r "$start_epoch" '+%H:%M')"
+      fi
     else
-      start_time="${start_date} $(date -d "@$start_epoch" '+%H:%M')"
+      start_date=$(date -d "@$start_epoch" '+%d/%m/%Y')
+      today=$(date '+%d/%m/%Y')
+      if [ "$start_date" = "$today" ]; then
+        start_time=$(date -d "@$start_epoch" '+%H:%M')
+      else
+        start_time="${start_date} $(date -d "@$start_epoch" '+%H:%M')"
+      fi
     fi
     now_epoch=$(date '+%s')
     elapsed=$((now_epoch - start_epoch))
@@ -79,6 +96,7 @@ else
 fi
 
 # Project name (from package.json if available, otherwise git root basename)
+project_name=""
 project_root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
 if [ -n "$project_root" ] && [ -f "$project_root/package.json" ]; then
   project_name=$(jq -r '.name // empty' "$project_root/package.json" 2>/dev/null)
