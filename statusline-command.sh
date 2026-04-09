@@ -1,4 +1,15 @@
 #!/bin/bash
+
+# Output preview (2 lines):
+#
+#   Line 1: <agent> [Model | ▓▓▓▓▓░░░░░ 50% / 200K] (folder) my-project + 2 dirs (ide) VS Code
+#   Line 2: my-project ((branch) main > +2 ~1) [wt:feature <- main] (clock) 14:30 (1h 12m)
+#
+# - Agent name only shown for subagents (e.g. "dotfiles-maintainer")
+# - (folder), (branch), (ide), (clock) = Nerd Font icons
+# - ⚠ appears before the bar when context exceeds 200k tokens
+# - Git status: ↑ ahead, + added, ~ modified, - deleted, ✓ clean
+
 input=$(cat)
 
 # Extract fields from JSON input
