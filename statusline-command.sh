@@ -208,8 +208,59 @@ else
   agent_part=""
 fi
 
-# Line 1: <Agent name> [Model / Context | Progress bar] <Folder icon> <Dir name> + <added dirs> <IDE icon> <IDE name>
-printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m] \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}${ide_part}\n" \
+# Effort / thinking indicator
+thinking_enabled=$(echo "$input" | jq -r '.thinking.enabled // false')
+effort_level=$(echo "$input" | jq -r '.effort.level // ""')
+if [ "$thinking_enabled" = "true" ] || [ -n "$effort_level" ]; then
+  case "$effort_level" in
+    auto)        effort_badge="🧠~" ;;
+    low)         effort_badge="🧠▁" ;;
+    medium)      effort_badge="🧠▃" ;;
+    high)        effort_badge="🧠▆" ;;
+    highest|max) effort_badge="🧠█" ;;
+    "")          effort_badge="🧠?" ;;
+    *)           effort_badge="🧠?" ;;
+  esac
+  effort_part=" ${effort_badge}"
+else
+  effort_part=""
+fi
+
+# Advisor indicator (read from Claude Code settings)
+advisor_model=$(jq -r '.advisorModel // ""' "$HOME/.claude/settings.json" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$advisor_model" ]; then
+  advisor_part=" \x1b[2;36m[advisor:${advisor_model}]\x1b[0m"
+else
+  advisor_part=""
+fi
+
+
+# Caveman mode indicator (only if caveman is installed)
+caveman_part=""
+if command -v caveman &>/dev/null || [ -d "$HOME/.config/caveman" ]; then
+  caveman_mode=""
+  if [ -f "$HOME/.config/caveman/active-mode" ]; then
+    caveman_mode=$(tr -d '[:space:]' < "$HOME/.config/caveman/active-mode" 2>/dev/null)
+  elif [ -f "$HOME/.config/caveman/config.json" ]; then
+    caveman_mode=$(jq -r '.defaultMode // ""' "$HOME/.config/caveman/config.json" 2>/dev/null | tr -d '[:space:]')
+  fi
+  case "$caveman_mode" in
+    lite)          caveman_badge="🪨▁" ;;
+    full)          caveman_badge="🪨▄" ;;
+    ultra)         caveman_badge="🪨█" ;;
+    wenyan-lite)   caveman_badge="🪨文▁" ;;
+    wenyan)        caveman_badge="🪨文▄" ;;
+    wenyan-ultra)  caveman_badge="🪨文█" ;;
+    off|"")        caveman_badge="" ;;
+    *)             caveman_badge="🪨?" ;;
+  esac
+  if [ -n "$caveman_badge" ]; then
+    caveman_part=" ${caveman_badge}"
+  fi
+fi
+
+# Line 1: <Agent name> [Model | Progress bar] <advisor> <effort> <caveman> <Folder icon> <Dir name> + <added dirs> <IDE icon> <IDE name>
+printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m]${advisor_part}${effort_part}${caveman_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}${ide_part}\n" \
   "$model_display" "$pct" "$context_fmt" "$dir_name"
 # Line 2: <Project name> <Git section> <Clock icon> <start time (duration)>
 clock_icon="\xef\x80\x97"
