@@ -198,15 +198,20 @@ else
 fi
 
 
-# Caveman mode indicator (only if caveman is installed)
+# Caveman mode indicator — reads flag written by caveman-activate.js
 caveman_part=""
-if command -v caveman &>/dev/null || [ -d "$HOME/.config/caveman" ]; then
-  caveman_mode=""
-  if [ -f "$HOME/.config/caveman/active-mode" ]; then
-    caveman_mode=$(tr -d '[:space:]' < "$HOME/.config/caveman/active-mode" 2>/dev/null)
-  elif [ -f "$HOME/.config/caveman/config.json" ]; then
-    caveman_mode=$(jq -r '.defaultMode // ""' "$HOME/.config/caveman/config.json" 2>/dev/null | tr -d '[:space:]')
+_caveman_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_caveman_dir" ]; then
+  if [ -f "$HOME/.claude/.caveman-active" ]; then
+    _caveman_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/.caveman-active" ]; then
+    _caveman_dir="$USERPROFILE/.claude"
+  else
+    _caveman_dir="$HOME/.claude"
   fi
+fi
+if [ -f "$_caveman_dir/.caveman-active" ]; then
+  caveman_mode=$(tr -d '[:space:]' < "$_caveman_dir/.caveman-active" 2>/dev/null)
   case "$caveman_mode" in
     lite)          caveman_badge="🪨▁" ;;
     full)          caveman_badge="🪨▄" ;;
