@@ -7,7 +7,7 @@
 #
 # - Agent name only shown for subagents (e.g. "dotfiles-maintainer")
 # - (folder), (branch), (clock) = Nerd Font icons
-# - ⚠ appears before the bar when context exceeds 200k tokens
+# - ⚠ appears before the bar when context exceeds 200k tokens (yellow >=200K, orange >=300K, red >=400K)
 # - Git status: ↑ ahead, + added, ~ modified, - deleted, ✓ clean
 
 input=$(cat)
@@ -79,9 +79,17 @@ else
   time_part=""
 fi
 
-# Warning icon if exceeding 200k tokens
+# Warning icon if exceeding 200k tokens; color escalates by used token count:
+#   >= 400K used: red, >= 300K used: orange (256-color), >= 200K used: yellow
+used_tokens=$(echo "$used_pct $context_size" | awk '{printf "%d", $1 * $2 / 100}' 2>/dev/null)
 if [ "$exceeds_200k" = "true" ]; then
-  warn="\x1b[1;33m\xef\x81\xb1 \x1b[0m"
+  if [ "$used_tokens" -ge 400000 ] 2>/dev/null; then
+    warn="\x1b[1;31m\xef\x81\xb1 \x1b[0m"
+  elif [ "$used_tokens" -ge 300000 ] 2>/dev/null; then
+    warn="\x1b[1;38;5;208m\xef\x81\xb1 \x1b[0m"
+  else
+    warn="\x1b[1;33m\xef\x81\xb1 \x1b[0m"
+  fi
 else
   warn=""
 fi
