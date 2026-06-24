@@ -179,20 +179,41 @@ else
   agent_part=""
 fi
 
+# Verbose mode flag — content-based: .statusline-style contains "verbose" = extended labels, else compact glyphs
+_verbose_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_verbose_dir" ]; then
+  if [ -f "$HOME/.claude/.statusline-style" ]; then
+    _verbose_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/.statusline-style" ]; then
+    _verbose_dir="$USERPROFILE/.claude"
+  else
+    _verbose_dir="$HOME/.claude"
+  fi
+fi
+_style_file="$_verbose_dir/.statusline-style"
+_style_content=$(cat "$_style_file" 2>/dev/null)
+_style_content="${_style_content#"${_style_content%%[![:space:]]*}"}"
+_style_content="${_style_content%"${_style_content##*[![:space:]]}"}"
+[ "$_style_content" = "verbose" ] && statusline_verbose=1 || statusline_verbose=
+
 # Effort / thinking indicator
 thinking_enabled=$(echo "$input" | jq -r '.thinking.enabled // false')
 effort_level=$(echo "$input" | jq -r '.effort.level // ""')
 if [ "$thinking_enabled" = "true" ] || [ -n "$effort_level" ]; then
   case "$effort_level" in
-    auto)        effort_badge="🧠~" ;;
-    low)         effort_badge="🧠▁" ;;
-    medium)      effort_badge="🧠▃" ;;
-    high)        effort_badge="🧠▆" ;;
-    highest|max) effort_badge="🧠█" ;;
-    "")          effort_badge="🧠?" ;;
-    *)           effort_badge="🧠?" ;;
+    auto)        effort_badge="🧠~"  ; effort_label="auto" ;;
+    low)         effort_badge="🧠▁"  ; effort_label="low" ;;
+    medium)      effort_badge="🧠▃"  ; effort_label="medium" ;;
+    high)        effort_badge="🧠▆"  ; effort_label="high" ;;
+    highest|max) effort_badge="🧠█"  ; effort_label="max" ;;
+    "")          effort_badge="🧠?"  ; effort_label="" ;;
+    *)           effort_badge="🧠?"  ; effort_label="" ;;
   esac
-  effort_part=" ${effort_badge}"
+  if [ -n "$statusline_verbose" ] && [ -n "$effort_label" ]; then
+    effort_part=" 🧠 effort:${effort_label}"
+  else
+    effort_part=" ${effort_badge}"
+  fi
 else
   effort_part=""
 fi
@@ -231,12 +252,46 @@ if [ -f "$_caveman_dir/.caveman-active" ]; then
     *)             caveman_badge="🪨?" ;;
   esac
   if [ -n "$caveman_badge" ]; then
-    caveman_part=" ${caveman_badge}"
+    if [ -n "$statusline_verbose" ]; then
+      caveman_part=" 🪨 caveman:${caveman_mode}"
+    else
+      caveman_part=" ${caveman_badge}"
+    fi
   fi
 fi
 
-# Line 1: <Agent name> [Model | Progress bar] <advisor> <effort> <caveman> <Folder icon> <Dir name> + <added dirs>
-printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m]${advisor_part}${effort_part}${caveman_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
+# Ponytail mode indicator — reads flag written by ponytail-activate hook
+ponytail_part=""
+_ponytail_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_ponytail_dir" ]; then
+  if [ -f "$HOME/.claude/.ponytail-active" ]; then
+    _ponytail_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/.ponytail-active" ]; then
+    _ponytail_dir="$USERPROFILE/.claude"
+  else
+    _ponytail_dir="$HOME/.claude"
+  fi
+fi
+if [ -f "$_ponytail_dir/.ponytail-active" ]; then
+  ponytail_mode=$(tr -d '[:space:]' < "$_ponytail_dir/.ponytail-active" 2>/dev/null)
+  case "$ponytail_mode" in
+    lite)   ponytail_badge="🤓▁" ;;
+    full)   ponytail_badge="🤓▄" ;;
+    ultra)  ponytail_badge="🤓█" ;;
+    off|"") ponytail_badge="" ;;
+    *)      ponytail_badge="🤓?" ;;
+  esac
+  if [ -n "$ponytail_badge" ]; then
+    if [ -n "$statusline_verbose" ]; then
+      ponytail_part=" 🤓 ponytail:${ponytail_mode}"
+    else
+      ponytail_part=" ${ponytail_badge}"
+    fi
+  fi
+fi
+
+# Line 1: <Agent name> [Model | Progress bar] <advisor> <effort> <caveman> <ponytail> 📂 <Dir name>
+printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m]${advisor_part}${effort_part}${caveman_part}${ponytail_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
   "$model_display" "$pct" "$context_fmt" "$dir_name"
 # Line 2: <Project name> <Git section> <Clock icon> <start time (duration)>
 clock_icon="\xef\x80\x97"
