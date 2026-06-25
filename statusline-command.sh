@@ -290,8 +290,23 @@ if [ -f "$_ponytail_dir/.ponytail-active" ]; then
   fi
 fi
 
-# Line 1: <Agent name> [Model | Progress bar] <advisor> <effort> <caveman> <ponytail> 📂 <Dir name>
-printf "${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m]${advisor_part}${effort_part}${caveman_part}${ponytail_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
+# Profile badge — reads raw badge string written by create-statusline-badge.sh.
+# Same config-dir resolution as caveman/ponytail above.
+badge_part=""
+_badge_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_badge_dir" ]; then
+  if [ -f "$HOME/.claude/statusline-badge.txt" ]; then
+    _badge_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/statusline-badge.txt" ]; then
+    _badge_dir="$USERPROFILE/.claude"
+  else
+    _badge_dir="$HOME/.claude"
+  fi
+fi
+[ -f "$_badge_dir/statusline-badge.txt" ] && badge_part=$(cat "$_badge_dir/statusline-badge.txt" 2>/dev/null)
+
+# Line 1: <Badge> <Agent name> [Model | Progress bar] <advisor> <effort> <caveman> <ponytail> 📂 <Dir name>
+printf "${badge_part}${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${bar} %d%% \x1b[2;37m/ %s\x1b[0m]${advisor_part}${effort_part}${caveman_part}${ponytail_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
   "$model_display" "$pct" "$context_fmt" "$dir_name"
 # Line 2: <Project name> <Git section> <Clock icon> <start time (duration)>
 clock_icon="\xef\x80\x97"
