@@ -463,7 +463,17 @@ else
 fi
 
 # Advisor indicator (read from Claude Code settings)
-advisor_model=$(jq -r '.advisorModel // ""' "$HOME/.claude/settings.json" 2>/dev/null | tr -d '[:space:]')
+_advisor_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_advisor_dir" ]; then
+  if [ -f "$HOME/.claude/settings.json" ]; then
+    _advisor_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/settings.json" ]; then
+    _advisor_dir="$USERPROFILE/.claude"
+  else
+    _advisor_dir="$HOME/.claude"
+  fi
+fi
+advisor_model=$(jq -r '.advisorModel // ""' "$_advisor_dir/settings.json" 2>/dev/null | tr -d '[:space:]')
 if [ -n "$advisor_model" ]; then
   advisor_part=" \x1b[2;36m[advisor:${advisor_model}]\x1b[0m"
 else

@@ -5,9 +5,10 @@
 # JSON on stdin, the rendered two lines on stdout.
 #
 # Isolation: every test gets its own mktemp -d, with both CLAUDE_CONFIG_DIR and
-# HOME pointed inside it. HOME matters because the advisor block reads
-# $HOME/.claude/settings.json directly (it does not honour CLAUDE_CONFIG_DIR), so
-# without the override the real ~/.claude would leak into the output. USERPROFILE
+# HOME pointed inside it. CLAUDE_CONFIG_DIR is where the config-dir cascade lands
+# (advisor, caveman, ponytail, badge, settings all read from it); HOME is the
+# fallback the cascade uses when CLAUDE_CONFIG_DIR is empty, and pointing it into
+# the temp dir keeps the real ~/.claude from leaking into the output. USERPROFILE
 # is unset so the Windows branch of the config-dir cascade can never fire.
 #
 # Assertions are on byte patterns observed from real runs (cat -A), not on what
@@ -134,6 +135,30 @@ epoch_in() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"🧠▆"* ]]
   [[ "$output" != *"effort:high"* ]]
+}
+
+# --- Advisor indicator --------------------------------------------------------
+#
+# The advisor is read from settings.json in the resolved config dir. With
+# CLAUDE_CONFIG_DIR set it must read that profile's settings.json, never HOME's.
+
+@test "advisor reads the CLAUDE_CONFIG_DIR profile settings.json" {
+  printf '{"advisorModel":"opus"}' > "$CLAUDE_CONFIG_DIR/settings.json"
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"advisor:opus"* ]]
+}
+
+# Negative: the advisor lives only in HOME while CLAUDE_CONFIG_DIR points at a
+# profile without one — it must not leak in. Proves the read is dir-scoped.
+@test "advisor in HOME does not leak when CLAUDE_CONFIG_DIR is a different profile" {
+  mkdir -p "$HOME/.claude"
+  printf '{"advisorModel":"sonnet"}' > "$HOME/.claude/settings.json"
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"advisor:"* ]]
 }
 
 # --- Badge precedence ---------------------------------------------------------
