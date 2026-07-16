@@ -1,9 +1,13 @@
 ---
-description: Set or toggle the statusline style (compact/verbose)
+description: Set or toggle the statusline style (compact/verbose) — shim for /statusline-options
 allowed-tools: Bash(node:*)
 ---
 
-Control the statusline style in the statusline settings file
+Shim kept for muscle memory and for the `statusline-style` shell alias.
+`/statusline-options style=compact|verbose` is the canonical path, and can set
+this alongside every other option in one go.
+
+Controls the statusline style in the statusline settings file
 (`$CLAUDE_CONFIG_DIR/.statusline-settings`, default `~/.claude/.statusline-settings`).
 `style` `verbose` = extended/verbose mode; `compact` (or absent) = compact.
 

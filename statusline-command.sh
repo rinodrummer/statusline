@@ -21,16 +21,36 @@
 #   one colour with the bar+percentage dominant; below 50% this faint variant is just dim white, same as before.
 # - [7d ...] shows the Claude.ai 7-day (weekly) rate-limit usage, mirroring the [5h] ramp/colour rules exactly
 #   (same 50/85/90 thresholds, same palette, same muted-brackets/full-strength-bar split). Opt-in only: it
-#   renders solely when `weekly` is `"on"` in `.statusline-settings` (see below) — off or missing means the
-#   group is omitted entirely, no spacing left behind. Its reset marker is " ↻Nd" (days remaining, ceil-rounded,
-#   floor of 1d) instead of a clock, since a weekly window resets days out; the marker is dropped if `resets_at`
-#   is missing or non-numeric.
+#   renders solely when `sections.seven_day` is true in `.statusline-settings` (see below) — false or missing
+#   means the group is omitted entirely, no spacing left behind. Its reset marker is " ↻Nd" (days remaining,
+#   ceil-rounded, floor of 1d) instead of a clock, since a weekly window resets days out; the marker is dropped
+#   if `resets_at` is missing or non-numeric.
 # - Settings live in one consolidated JSON file, `.statusline-settings`, in the config dir (same cascade as
-#   the other flag files): `{"style": "compact"|"verbose", "weekly": "on"|"off", "badge": "<raw badge string>"}`.
-#   Missing/unreadable/malformed file degrades silently to compact/off/no-badge. If `.statusline-settings`
-#   doesn't exist yet, `style` falls back to the legacy `.statusline-style` flag file (content "verbose" =
-#   extended labels) so upgrades don't lose the current setting; once `.statusline-settings` exists it wins
-#   outright and the legacy file is ignored.
+#   the other flag files). Canonical shape (see statusline-settings.schema.json in the repo root):
+#     {"style": "compact"|"verbose", "badge": "<raw badge string>",
+#      "sections": {"context": true, "five_hour": true, "seven_day": false, "advisor": true, "effort": true,
+#                   "caveman": true, "ponytail": true, "git": true, "session_start_date": true, "agent": true}}
+#   Stored values are canonical: statusline-settings.js folds case on the way in (`style=VERBOSE`) and
+#   normalises booleans, so the comparisons below are exact on purpose. A hand-edited "VERBOSE" is NOT
+#   honoured — it degrades to the default here exactly as it does in statusline-settings.js, which is what
+#   keeps the two readers agreeing. Do not add tolerance to one side alone.
+#   Missing/unreadable/malformed file degrades silently to those defaults (and no badge). If
+#   `.statusline-settings` doesn't exist yet, `style` falls back to the legacy `.statusline-style` flag file
+#   (content "verbose" = extended labels) so upgrades don't lose the current setting; once
+#   `.statusline-settings` exists it wins outright and the legacy file is ignored.
+# - Every `sections.*` key gates one renderable group: false omits it entirely, leaving no separator or double
+#   space behind (each group carries its own leading space, so an empty one collapses cleanly). `context`
+#   gates the bar/percentage/window run INSIDE the model bracket, which still renders as a bare [Model] —
+#   the model name has no gate of its own. `session_start_date` gates the whole line-2 clock group (icon,
+#   start time and duration), which is what `/statusline-options clock=false` sets.
+# - `weekly` is the superseded storage key for `sections.seven_day`, still honoured on read in both shapes ever
+#   written ("on"/"off" strings and booleans). The canonical key wins when both are present; the alias is
+#   dropped from the file the next time statusline-settings.js writes it.
+# - `sections.agent` gates the agent label like any other section: true (the default) shows it whenever the
+#   session input carries `.agent.name`, false never does. "Subagents only" is not a rule this script applies —
+#   it is what the data does, since Claude Code populates `.agent.name` for subagents alone. If that ever
+#   changes and "always" becomes distinct from "subagents only", this key needs a third state; until then a
+#   boolean says everything that is true.
 # - Profile badge: a non-empty `badge` key in `.statusline-settings` wins outright. An explicit empty string
 #   does NOT count as "set" (it falls through, so it can never mask a real badge file). Otherwise falls back
 #   to the dedicated `statusline-badge.txt` file in the same config dir, for machines not yet migrated onto
@@ -40,6 +60,109 @@
 #   progression across `git add`.
 
 input=$(cat)
+
+# --- Consolidated settings: .statusline-settings ------------------------------
+#
+# Parsed once, up front, because the section gates below decide whether whole
+# groups are computed at all. Malformed/unreadable JSON degrades silently to the
+# defaults (compact, no badge, every section on except seven_day):
+# a failed jq leaves every variable empty, and empty means "fall back", so the
+# defaults below are the single source of truth on the bash side.
+#
+# Falls back to the legacy .statusline-style file (content-based: "verbose" =
+# extended labels) only when .statusline-settings doesn't exist yet, so upgrades
+# don't lose the current setting; once .statusline-settings exists it wins
+# outright and the legacy file is ignored (the legacy path has no equivalent for
+# any other key — the badge always falls to statusline-badge.txt, see below).
+#
+# The one-value-per-line shape below (not @tsv) is deliberate: @tsv escapes
+# embedded backslashes/tabs to keep the row parseable, which would double every
+# backslash in an ANSI badge (\x1b -> \\x1b) and print as literal text once
+# printf gets it. Plain jq -r raw output does no such re-escaping, so each value
+# is emitted on its own line (jq's normal behaviour for a comma-separated filter)
+# and read back with one `read` per line — no separator character needed, so
+# nothing to clash with a byte the badge might legitimately contain. The badge is
+# read LAST for the same reason a badge is hard: it is the only value that could
+# itself contain a newline, and trailing garbage lines are harmless.
+_settings_dir="${CLAUDE_CONFIG_DIR:-}"
+if [ -z "$_settings_dir" ]; then
+  if [ -f "$HOME/.claude/.statusline-settings" ] || [ -f "$HOME/.claude/.statusline-style" ]; then
+    _settings_dir="$HOME/.claude"
+  elif [ -n "$USERPROFILE" ] && { [ -f "$USERPROFILE/.claude/.statusline-settings" ] || [ -f "$USERPROFILE/.claude/.statusline-style" ]; }; then
+    _settings_dir="$USERPROFILE/.claude"
+  else
+    _settings_dir="$HOME/.claude"
+  fi
+fi
+_settings_file="$_settings_dir/.statusline-settings"
+_style_value=""
+_badge_value=""
+_sec_agent=""
+_sec_context=""
+_sec_five_hour=""
+_sec_seven_day=""
+_sec_advisor=""
+_sec_effort=""
+_sec_caveman=""
+_sec_ponytail=""
+_sec_git=""
+_sec_session_start_date=""
+if [ -f "$_settings_file" ]; then
+  # A section key emits its boolean, or "" when absent/not-a-boolean so the bash
+  # default applies. seven_day additionally honours the superseded "weekly" key
+  # (written as "on"/"off" strings by older versions, as a boolean by the schema)
+  # — but only when the canonical sections.seven_day says nothing, so an explicit
+  # canonical value is never overridden by the alias it replaced.
+  _settings_parsed=$(jq -r '
+    def section(name):
+      if (.sections[name] | type) == "boolean" then (.sections[name] | tostring) else "" end;
+    (.style // ""),
+    section("agent"),
+    section("context"),
+    section("five_hour"),
+    (if (.sections.seven_day | type) == "boolean" then (.sections.seven_day | tostring)
+     elif (.weekly | type) == "boolean" then (.weekly | tostring)
+     elif .weekly == "on" then "true"
+     elif .weekly == "off" then "false"
+     else "" end),
+    section("advisor"),
+    section("effort"),
+    section("caveman"),
+    section("ponytail"),
+    section("git"),
+    section("session_start_date"),
+    (.badge // "")
+  ' "$_settings_file" 2>/dev/null)
+  {
+    IFS= read -r _style_value
+    IFS= read -r _sec_agent
+    IFS= read -r _sec_context
+    IFS= read -r _sec_five_hour
+    IFS= read -r _sec_seven_day
+    IFS= read -r _sec_advisor
+    IFS= read -r _sec_effort
+    IFS= read -r _sec_caveman
+    IFS= read -r _sec_ponytail
+    IFS= read -r _sec_git
+    IFS= read -r _sec_session_start_date
+    IFS= read -r _badge_value
+  } <<< "$_settings_parsed"
+else
+  _style_content=$(cat "$_settings_dir/.statusline-style" 2>/dev/null)
+  _style_content="${_style_content#"${_style_content%%[![:space:]]*}"}"
+  _style_content="${_style_content%"${_style_content##*[![:space:]]}"}"
+  [ "$_style_content" = "verbose" ] && _style_value="verbose"
+fi
+_style_value="${_style_value:-compact}"
+[ "$_style_value" = "verbose" ] && statusline_verbose=1 || statusline_verbose=
+
+# Section gate: `section_enabled <value> <default>` — an empty value (key absent,
+# not a boolean, or the whole file unreadable) falls back to the schema default.
+section_enabled() {
+  local _value="$1" _default="$2"
+  [ -z "$_value" ] && _value="$_default"
+  [ "$_value" = "true" ]
+}
 
 # Extract fields from JSON input
 model_display=$(echo "$input" | jq -r '.model.display_name // .model // "unknown"')
@@ -63,8 +186,12 @@ fi
 # Platform detection
 _os=$(uname -s)
 
-# Session start time and duration
-if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+# Session start time and duration — the whole line-2 clock group, gated by
+# sections.session_start_date (`/statusline-options clock=false`). Skipped
+# outright when off: an empty time_part collapses its own separator downstream.
+if ! section_enabled "$_sec_session_start_date" true; then
+  time_part=""
+elif [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
   if [ "$_os" = "Darwin" ]; then
     start_epoch=$(stat -f '%B' "$transcript_path" 2>/dev/null)
   else
@@ -189,10 +316,16 @@ else
   context_colour_reset=""
 fi
 
-# 5-hour session-limit bar (Claude.ai subscription only; absent for API-key auth)
+# 5-hour session-limit bar (Claude.ai subscription only; absent for API-key auth).
+# Gated by sections.five_hour; the group carries its own leading space, so an
+# empty five_hour_part leaves no gap behind.
 five_hour_bar_width=5
-five_hour_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-five_hour_resets=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+if section_enabled "$_sec_five_hour" true; then
+  five_hour_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+  five_hour_resets=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+else
+  five_hour_pct=""
+fi
 if [ -n "$five_hour_pct" ]; then
   five_hour_int=${five_hour_pct%%.*}
   five_hour_bar=$(render_bar "$five_hour_int" "$five_hour_bar_width")
@@ -288,8 +421,13 @@ else
   repo_name=""
 fi
 
-# Git branch
-git_branch=$(git -C "$cwd" branch --show-current 2>/dev/null || echo "")
+# Git branch — gated by sections.git, which covers the whole line-2 git group
+# (repo, branch, status icons and the worktree marker that hangs off it).
+if section_enabled "$_sec_git" true; then
+  git_branch=$(git -C "$cwd" branch --show-current 2>/dev/null || echo "")
+else
+  git_branch=""
+fi
 
 # Git status
 if [ -n "$git_branch" ]; then
@@ -331,59 +469,25 @@ else
   git_part=""
 fi
 
-# Agent name (if running as an agent)
-agent_name=$(echo "$input" | jq -r '.agent.name // ""')
+# Agent name, gated by sections.agent: on (the default) shows it whenever the
+# input carries .agent.name, which today means subagents only — that condition is
+# the data's, not this script's, so there is nothing here to enforce it.
+if section_enabled "$_sec_agent" true; then
+  agent_name=$(echo "$input" | jq -r '.agent.name // ""')
+else
+  agent_name=""
+fi
 if [ -n "$agent_name" ]; then
   agent_part="\x1b[1;32m${agent_name}\x1b[0m "
 else
   agent_part=""
 fi
 
-# Consolidated settings: .statusline-settings (JSON: {"style", "weekly", "badge"}).
-# Read once via jq for all three keys. Malformed/unreadable JSON degrades silently to the defaults
-# (compact, off, no badge). Falls back to the legacy .statusline-style file (content-based: "verbose" =
-# extended labels) only when .statusline-settings doesn't exist yet, so upgrades don't lose the current
-# setting; once .statusline-settings exists it wins outright and the legacy file is ignored (the legacy
-# path has no equivalent for "badge" — that always falls to statusline-badge.txt, see below).
-#
-# The three-values-on-three-lines shape below (not @tsv) is deliberate: @tsv escapes embedded
-# backslashes/tabs to keep the row parseable, which would double every backslash in an ANSI badge
-# (\x1b -> \\x1b) and print as literal text once printf gets it. Plain jq -r raw output does no such
-# re-escaping, so each value is emitted on its own line (jq's normal behaviour for a comma-separated
-# filter) and read back with one `read` per line — no separator character needed, so nothing to clash
-# with a byte the badge might legitimately contain.
-_settings_dir="${CLAUDE_CONFIG_DIR:-}"
-if [ -z "$_settings_dir" ]; then
-  if [ -f "$HOME/.claude/.statusline-settings" ] || [ -f "$HOME/.claude/.statusline-style" ]; then
-    _settings_dir="$HOME/.claude"
-  elif [ -n "$USERPROFILE" ] && { [ -f "$USERPROFILE/.claude/.statusline-settings" ] || [ -f "$USERPROFILE/.claude/.statusline-style" ]; }; then
-    _settings_dir="$USERPROFILE/.claude"
-  else
-    _settings_dir="$HOME/.claude"
-  fi
-fi
-_settings_file="$_settings_dir/.statusline-settings"
-_style_value=""
-_weekly_value=""
-_badge_value=""
-if [ -f "$_settings_file" ]; then
-  _settings_parsed=$(jq -r '(.style // "compact"), (.weekly // "off"), (.badge // "")' "$_settings_file" 2>/dev/null)
-  { IFS= read -r _style_value; IFS= read -r _weekly_value; IFS= read -r _badge_value; } <<< "$_settings_parsed"
-else
-  _style_content=$(cat "$_settings_dir/.statusline-style" 2>/dev/null)
-  _style_content="${_style_content#"${_style_content%%[![:space:]]*}"}"
-  _style_content="${_style_content%"${_style_content##*[![:space:]]}"}"
-  [ "$_style_content" = "verbose" ] && _style_value="verbose"
-fi
-_style_value="${_style_value:-compact}"
-_weekly_value="${_weekly_value:-off}"
-[ "$_style_value" = "verbose" ] && statusline_verbose=1 || statusline_verbose=
-[ "$_weekly_value" = "on" ] && statusline_weekly=1 || statusline_weekly=
-
 # 7-day weekly rate-limit bar — same shape/ramp as the 5h block above, rendered right after it on line 1.
-# Opt-in via the "weekly" setting; renders nothing at all (no spacing left behind) when off.
+# Opt-in via sections.seven_day (the superseded "weekly" alias still feeds it, resolved at parse time up
+# top); renders nothing at all (no spacing left behind) when off.
 seven_day_part=""
-if [ -n "$statusline_weekly" ]; then
+if section_enabled "$_sec_seven_day" false; then
   seven_day_bar_width=5
   seven_day_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
   seven_day_resets=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
@@ -440,9 +544,14 @@ if [ -n "$statusline_weekly" ]; then
   fi
 fi
 
-# Effort / thinking indicator
-thinking_enabled=$(echo "$input" | jq -r '.thinking.enabled // false')
-effort_level=$(echo "$input" | jq -r '.effort.level // ""')
+# Effort / thinking indicator, gated by sections.effort
+if section_enabled "$_sec_effort" true; then
+  thinking_enabled=$(echo "$input" | jq -r '.thinking.enabled // false')
+  effort_level=$(echo "$input" | jq -r '.effort.level // ""')
+else
+  thinking_enabled="false"
+  effort_level=""
+fi
 if [ "$thinking_enabled" = "true" ] || [ -n "$effort_level" ]; then
   case "$effort_level" in
     auto)        effort_badge="🧠~"  ; effort_label="auto" ;;
@@ -473,7 +582,12 @@ if [ -z "$_advisor_dir" ]; then
     _advisor_dir="$HOME/.claude"
   fi
 fi
-advisor_model=$(jq -r '.advisorModel // ""' "$_advisor_dir/settings.json" 2>/dev/null | tr -d '[:space:]')
+# Gated by sections.advisor: skip the settings.json read entirely when off.
+if section_enabled "$_sec_advisor" true; then
+  advisor_model=$(jq -r '.advisorModel // ""' "$_advisor_dir/settings.json" 2>/dev/null | tr -d '[:space:]')
+else
+  advisor_model=""
+fi
 if [ -n "$advisor_model" ]; then
   advisor_part=" \x1b[2;36m[advisor:${advisor_model}]\x1b[0m"
 else
@@ -493,7 +607,8 @@ if [ -z "$_caveman_dir" ]; then
     _caveman_dir="$HOME/.claude"
   fi
 fi
-if [ -f "$_caveman_dir/.caveman-active" ]; then
+# Gated by sections.caveman: skip the flag-file read entirely when off.
+if section_enabled "$_sec_caveman" true && [ -f "$_caveman_dir/.caveman-active" ]; then
   caveman_mode=$(tr -d '[:space:]' < "$_caveman_dir/.caveman-active" 2>/dev/null)
   case "$caveman_mode" in
     lite)          caveman_badge="🪨▁" ;;
@@ -526,7 +641,8 @@ if [ -z "$_ponytail_dir" ]; then
     _ponytail_dir="$HOME/.claude"
   fi
 fi
-if [ -f "$_ponytail_dir/.ponytail-active" ]; then
+# Gated by sections.ponytail: skip the flag-file read entirely when off.
+if section_enabled "$_sec_ponytail" true && [ -f "$_ponytail_dir/.ponytail-active" ]; then
   ponytail_mode=$(tr -d '[:space:]' < "$_ponytail_dir/.ponytail-active" 2>/dev/null)
   case "$ponytail_mode" in
     lite)   ponytail_badge="🤓▁" ;;
@@ -567,8 +683,21 @@ else
 fi
 
 # Line 1: <Badge> <Agent name> [Model | Progress bar] [5h bar] <advisor> <effort> <caveman> <ponytail> 📂 <Dir name>
-printf "${badge_part}${agent_part}[\x1b[1;33m%s\x1b[0m | ${warn}${context_colour}${bar} %d%%${context_colour_reset} \x1b[2;37m/ %s\x1b[0m]${five_hour_part}${seven_day_part}${advisor_part}${effort_part}${caveman_part}${ponytail_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
-  "$model_display" "$pct" "$context_fmt" "$dir_name"
+#
+# sections.context gates the run INSIDE the model bracket (warning icon, bar,
+# percentage and window size); the bracket and the model name always render, so
+# context=false leaves a bare [Model]. The conditional run carries printf
+# conversions, so its arguments have to disappear with it — an extra argument
+# would make printf reuse the whole format string and emit the line twice.
+if section_enabled "$_sec_context" true; then
+  context_run=" | ${warn}${context_colour}${bar} %d%%${context_colour_reset} \x1b[2;37m/ %s\x1b[0m"
+  line1_args=("$model_display" "$pct" "$context_fmt" "$dir_name")
+else
+  context_run=""
+  line1_args=("$model_display" "$dir_name")
+fi
+printf "${badge_part}${agent_part}[\x1b[1;33m%s\x1b[0m${context_run}]${five_hour_part}${seven_day_part}${advisor_part}${effort_part}${caveman_part}${ponytail_part} \xf0\x9f\x93\x82 \x1b[1;34m%s\x1b[0m${added_dirs_part}\n" \
+  "${line1_args[@]}"
 # Line 2: <Project name> <Git section> <Clock icon> <start time (duration)>
 clock_icon="\xef\x80\x97"
 printf "\x1b[1;35m%s\x1b[0m${git_part}${time_part:+ ${clock_icon}${time_part}}" "$project_name"

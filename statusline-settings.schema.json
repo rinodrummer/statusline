@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rinodrummer/dotfiles/statusline-settings.schema.json",
+  "title": "Statusline Settings",
+  "description": "Shape of $CLAUDE_CONFIG_DIR/.statusline-settings (default ~/.claude/.statusline-settings), the single config store shared by .claude/statusline-command.sh (the renderer) and scripts/claude/statusline-settings.js (the writer, fronted by /statusline-options). Editor autocomplete and test-time checks only: nothing validates against this at runtime, because a settings file that fails validation must still render a statusline rather than break the prompt. Both readers degrade silently to the defaults declared here instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "style": {
+      "type": "string",
+      "enum": ["compact", "verbose"],
+      "default": "compact",
+      "description": "verbose spells the effort/caveman/ponytail indicators out as labels; compact renders them as badges."
+    },
+    "weekly": {
+      "type": "boolean",
+      "default": false,
+      "description": "SUPERSEDED alias for sections.seven_day, still read so files written by older versions keep working. sections.seven_day wins when both are present, and the next write drops this key. Files in the wild may also hold the strings \"on\"/\"off\" (the shape this key was originally written in); both readers accept them, this schema declares only the boolean because that is the form still worth writing."
+    },
+    "badge": {
+      "type": "string",
+      "description": "Raw badge string, ANSI-capable, prepended to line 1. Empty string is treated as absent, which is what makes the renderer fall back to the superseded statusline-badge.txt. No default: absent means no badge from here."
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-section visibility. false omits the section entirely, leaving no separator or double space behind.",
+      "properties": {
+        "context": {
+          "type": "boolean",
+          "default": true,
+          "description": "The bar/percentage/window-size run inside the model bracket. false still renders a bare [Model]: the model name has no gate of its own."
+        },
+        "five_hour": {
+          "type": "boolean",
+          "default": true,
+          "description": "The [5h] rate-limit group. Also omitted regardless when the session input carries no five_hour data (API-key auth)."
+        },
+        "seven_day": {
+          "type": "boolean",
+          "default": false,
+          "description": "The [7d] weekly rate-limit group. The one section defaulting off — opt-in via /statusline-options weekly=true."
+        },
+        "advisor": { "type": "boolean", "default": true, "description": "The [advisor:<model>] marker, read from advisorModel in the config dir's settings.json." },
+        "effort": { "type": "boolean", "default": true, "description": "The effort/thinking indicator." },
+        "caveman": { "type": "boolean", "default": true, "description": "The caveman-mode indicator, read from the .caveman-active flag file." },
+        "ponytail": { "type": "boolean", "default": true, "description": "The ponytail-mode indicator, read from the .ponytail-active flag file." },
+        "git": { "type": "boolean", "default": true, "description": "The line-2 git group: repo, branch, status icons and the worktree marker. The project name is not part of it and always renders." },
+        "session_start_date": {
+          "type": "boolean",
+          "default": true,
+          "description": "The whole line-2 clock group: icon, session start time and duration. Set via /statusline-options clock=false."
+        },
+        "agent": {
+          "type": "boolean",
+          "default": true,
+          "description": "The agent label at the head of line 1. true shows it whenever the session input carries .agent.name, which today means subagents only — that restriction is what the data does, not a rule the renderer applies. A boolean rather than a tri-state for exactly that reason: with no input that distinguishes \"always\" from \"subagents only\", a third state would document an intent nothing implements."
+        }
+      }
+    }
+  }
+}

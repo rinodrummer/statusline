@@ -59,7 +59,31 @@ epoch_in() {
 
 # --- Consolidated settings: .statusline-settings ------------------------------
 
-@test "weekly on: 7d group renders when seven_day is in the input" {
+@test "sections.seven_day true: 7d group renders when seven_day is in the input" {
+  write_settings '{"sections":{"seven_day":true}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[7d "* ]]
+  [[ "$output" == *"45%"* ]]
+}
+
+@test "sections.seven_day false: no 7d group even with seven_day in the input" {
+  write_settings '{"sections":{"seven_day":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"[7d"* ]]
+}
+
+# --- The superseded "weekly" alias --------------------------------------------
+#
+# Settings files in the wild hold weekly as "on"/"off" strings; the schema
+# declares a boolean. The renderer has to honour both, because a machine whose
+# user never runs statusline-settings.js never gets the key rewritten — the file
+# just sits there in its old shape, and the bar has to keep working.
+
+@test "weekly alias on: 7d group renders" {
   write_settings '{"weekly":"on"}'
   run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
 
@@ -68,8 +92,32 @@ epoch_in() {
   [[ "$output" == *"45%"* ]]
 }
 
-@test "weekly off: no 7d group even with seven_day in the input" {
+@test "weekly alias off: no 7d group even with seven_day in the input" {
   write_settings '{"weekly":"off"}'
+  run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"[7d"* ]]
+}
+
+@test "weekly alias as a boolean (the schema shape) is honoured too" {
+  write_settings '{"weekly":true}'
+  run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[7d "* ]]
+}
+
+@test "canonical sections.seven_day beats the weekly alias when both are present" {
+  write_settings '{"weekly":"on","sections":{"seven_day":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"[7d"* ]]
+}
+
+@test "a garbage weekly value falls back to the default, not to on" {
+  write_settings '{"weekly":"yes"}'
   run bash "$SCRIPT" <<< "$(statusline_input ",\"rate_limits\":{\"seven_day\":{\"used_percentage\":45,\"resets_at\":$(epoch_in 200000)}}")"
 
   [ "$status" -eq 0 ]
@@ -117,6 +165,21 @@ epoch_in() {
   [[ "$output" != *"jq:"* ]]
   [[ "$output" != *"error"* ]]
   [[ "$output" != *"Error"* ]]
+}
+
+# /statusline-options folds case on the way IN and stores the canonical spelling,
+# so the renderer never has to. This pins the other half of that contract: a
+# hand-edited non-canonical value is not honoured here either. Both readers
+# degrading it to the same default is what keeps them agreeing — a renderer that
+# quietly accepted "VERBOSE" would render verbose while /statusline-options
+# reported compact.
+@test "a non-canonical stored style is not folded: it degrades to the default" {
+  write_settings '{"style":"VERBOSE"}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🧠▆"* ]]
+  [[ "$output" != *"effort:high"* ]]
 }
 
 @test "legacy .statusline-style verbose applies when .statusline-settings is absent" {
@@ -287,6 +350,256 @@ epoch_in() {
 
   [ "$status" -eq 0 ]
   [[ "$output" != *"[7d"* ]]
+}
+
+# --- Section gates ------------------------------------------------------------
+#
+# Every sections.* key gates one renderable group. Each test drives the section
+# ON (or relies on its default) to prove the fixture really produces the group,
+# then OFF to prove it vanishes — a gate test that only checks the OFF case
+# passes just as well when the fixture was never rendering anything.
+#
+# Absence of a group is asserted on a byte pattern unique to it, and line 1 is
+# additionally checked for the double space a naively-removed group leaves.
+
+# Line 1 must never contain a run of two spaces: every group carries its own
+# leading space, so a group that "renders empty" instead of vanishing shows up
+# here rather than as a wrong-looking-but-passing assertion.
+refute_double_space() {
+  [[ "${lines[0]}" != *"  "* ]]
+}
+
+@test "sections.context false: bare [Model], no bar, no percentage, no window" {
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"42%"* ]]
+  [[ "$output" == *"/ 200K"* ]]
+
+  write_settings '{"sections":{"context":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  # The bracket and the model name survive — the model has no gate of its own.
+  [[ "${lines[0]}" == *"[""$(printf '\e[1;33m')""M""$(printf '\e[0m')""]"* ]]
+  [[ "$output" != *"42%"* ]]
+  [[ "$output" != *"/ 200K"* ]]
+  [[ "$output" != *"▒"* ]]
+  refute_double_space
+}
+
+# The context run carries printf conversions (%d, %s). Dropping the run without
+# dropping its arguments makes printf reuse the whole format string and emit the
+# line a second time — so assert the line count, not just the missing bar.
+@test "sections.context false: line 1 is not duplicated by leftover printf args" {
+  write_settings '{"sections":{"context":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "${lines[0]}" != *"200K"* ]]
+}
+
+@test "sections.five_hour false: no 5h group" {
+  local input
+  input="$(statusline_input ",\"rate_limits\":{\"five_hour\":{\"used_percentage\":71,\"resets_at\":$(epoch_in 3600)}}")"
+  run bash "$SCRIPT" <<< "$input"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[5h "* ]]
+
+  write_settings '{"sections":{"five_hour":false}}'
+  run bash "$SCRIPT" <<< "$input"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"[5h"* ]]
+  refute_double_space
+}
+
+@test "sections.advisor false: no advisor marker" {
+  printf '{"advisorModel":"opus"}' > "$CLAUDE_CONFIG_DIR/settings.json"
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"advisor:opus"* ]]
+
+  write_settings '{"sections":{"advisor":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"advisor"* ]]
+  refute_double_space
+}
+
+@test "sections.effort false: no effort indicator in either style" {
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🧠"* ]]
+
+  write_settings '{"sections":{"effort":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"🧠"* ]]
+  refute_double_space
+
+  # The gate must win over verbose too, not just over the badge form.
+  write_settings '{"style":"verbose","sections":{"effort":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"effort:"* ]]
+  [[ "$output" != *"🧠"* ]]
+}
+
+@test "sections.caveman false: no caveman indicator" {
+  printf 'full' > "$CLAUDE_CONFIG_DIR/.caveman-active"
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🪨"* ]]
+
+  write_settings '{"sections":{"caveman":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"🪨"* ]]
+  refute_double_space
+}
+
+@test "sections.ponytail false: no ponytail indicator" {
+  printf 'full' > "$CLAUDE_CONFIG_DIR/.ponytail-active"
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🤓"* ]]
+
+  write_settings '{"sections":{"ponytail":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"🤓"* ]]
+  refute_double_space
+}
+
+@test "sections.git false: no git group, project name survives" {
+  init_repo
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *"main"* ]]
+
+  write_settings '{"sections":{"git":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" != *"main"* ]]
+  # The project name is not part of the git group and must still render.
+  [[ "${lines[1]}" == *"work"* ]]
+  [[ "${lines[1]}" != *"  "* ]]
+}
+
+@test "sections.git false: no worktree marker either" {
+  init_repo
+  local input
+  input="$(statusline_input ',"worktree":{"name":"wt","branch":"feat","original_branch":"main"}')"
+  run bash "$SCRIPT" <<< "$input"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wt"* ]]
+
+  # The worktree marker hangs off the git group; gating git must take it along.
+  write_settings '{"sections":{"git":false}}'
+  run bash "$SCRIPT" <<< "$input"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"feat"* ]]
+}
+
+@test "sections.session_start_date false: no clock group" {
+  local transcript="$TMP/transcript.jsonl"
+  printf '{}\n' > "$transcript"
+  local input
+  input="$(statusline_input ",\"transcript_path\":\"$transcript\"")"
+  run bash "$SCRIPT" <<< "$input"
+  [ "$status" -eq 0 ]
+  # Guard the premise: birth time is filesystem-dependent, and without it the
+  # clock group never renders and the OFF assertion below proves nothing.
+  [[ "${lines[1]}" == *$'\xef\x80\x97'* ]] || skip "filesystem reports no birth time"
+
+  write_settings '{"sections":{"session_start_date":false}}'
+  run bash "$SCRIPT" <<< "$input"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" != *$'\xef\x80\x97'* ]]
+  [[ "${lines[1]}" != *"  "* ]]
+}
+
+@test "all sections off: line 1 is badge-free [Model] + folder, line 2 the project" {
+  init_repo
+  write_settings '{"sections":{"context":false,"five_hour":false,"seven_day":false,"advisor":false,"effort":false,"caveman":false,"ponytail":false,"git":false,"session_start_date":false,"agent":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"agent":{"name":"sub"},"effort":{"level":"high"},"rate_limits":{"five_hour":{"used_percentage":71}}')"
+
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  refute_double_space
+  [[ "${lines[1]}" != *"  "* ]]
+  [[ "${lines[0]}" == "["* ]]
+  [[ "$output" != *"[5h"* ]]
+  [[ "$output" != *"🧠"* ]]
+  [[ "$output" != *"sub"* ]]
+  [[ "$output" != *"main"* ]]
+}
+
+@test "sections default on: an empty sections object changes nothing" {
+  init_repo
+  printf '{"advisorModel":"opus"}' > "$CLAUDE_CONFIG_DIR/settings.json"
+  write_settings '{"sections":{}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"42%"* ]]
+  [[ "$output" == *"advisor:opus"* ]]
+  [[ "$output" == *"🧠"* ]]
+  [[ "${lines[1]}" == *"main"* ]]
+  # ...except seven_day, the one section that defaults off.
+  [[ "$output" != *"[7d"* ]]
+}
+
+@test "a non-boolean section value falls back to its default" {
+  write_settings '{"sections":{"context":"false"}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  # The string "false" is not the boolean false: garbage degrades to the default
+  # (on) rather than silently hiding a section.
+  [[ "$output" == *"42%"* ]]
+}
+
+# --- sections.agent -----------------------------------------------------------
+
+@test "sections.agent default: the agent label renders when the input carries one" {
+  run bash "$SCRIPT" <<< "$(statusline_input ',"agent":{"name":"dotfiles-maintainer"}')"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == *"dotfiles-maintainer"* ]]
+}
+
+@test "sections.agent true: the agent label renders" {
+  write_settings '{"sections":{"agent":true}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"agent":{"name":"dotfiles-maintainer"}')"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == *"dotfiles-maintainer"* ]]
+}
+
+@test "sections.agent false: no agent label even when the input carries one" {
+  write_settings '{"sections":{"agent":false}}'
+  run bash "$SCRIPT" <<< "$(statusline_input ',"agent":{"name":"dotfiles-maintainer"}')"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" != *"dotfiles-maintainer"* ]]
+  # The label sits at the head of line 1, so a botched gate shows up as a
+  # leading space rather than as leftover text.
+  [[ "${lines[0]}" == "["* ]]
+}
+
+@test "sections.agent true with no agent in the input: nothing to show, no stray space" {
+  write_settings '{"sections":{"agent":true}}'
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == "["* ]]
 }
 
 # --- Git status icons ---------------------------------------------------------
