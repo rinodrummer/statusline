@@ -12,7 +12,7 @@ const { spawnSync } = require("child_process");
 
 const SCRIPT = path.resolve(
   __dirname,
-  "../../scripts/claude/statusline-settings.js"
+  "../../statusline-settings.js"
 );
 const SCHEMA = path.resolve(__dirname, "../../statusline-settings.schema.json");
 
@@ -43,9 +43,17 @@ function makeDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "settings-test-"));
 }
 
-function run(configDir, args) {
+// Drives the CLI against an isolated config dir.
+//
+// STATUSLINE_CONFIG_DIR is stripped rather than merely left alone: it outranks
+// CLAUDE_CONFIG_DIR in the script's resolution, so a developer with it exported
+// would otherwise point every test in this file at their real settings file. Pass
+// envOverrides to set it deliberately (the resolution tests below do).
+function run(configDir, args, envOverrides = {}) {
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir };
+  delete env.STATUSLINE_CONFIG_DIR;
   return spawnSync("node", [SCRIPT, ...args], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+    env: { ...env, ...envOverrides },
     encoding: "utf8",
   });
 }
@@ -1033,5 +1041,99 @@ test("a config written by the script validates against the schema's key set", ()
         `written section ${key} is not in the schema`
       );
     }
+  });
+});
+
+// --- config dir resolution ---------------------------------------------------
+//
+// The precedence is a contract with the renderer's resolve_config_dir, not a
+// local choice: both read and write the same .statusline-settings, so if they
+// resolve differently, `options` reports settings that are not the ones being
+// rendered. These pin the JS side; tests/bash/statusline-command.bats pins the
+// renderer's. A change to one without the other should fail here.
+
+test("STATUSLINE_CONFIG_DIR wins over CLAUDE_CONFIG_DIR when reading", () => {
+  withDir((claudeDir) => {
+    withDir((statuslineDir) => {
+      fs.writeFileSync(settingsPath(claudeDir), JSON.stringify({ style: "compact" }));
+      fs.writeFileSync(settingsPath(statuslineDir), JSON.stringify({ style: "verbose" }));
+      const res = run(claudeDir, ["options", "--json"], {
+        STATUSLINE_CONFIG_DIR: statuslineDir,
+      });
+      assert.strictEqual(res.status, 0);
+      assert.strictEqual(JSON.parse(res.stdout).style, "verbose");
+    });
+  });
+});
+
+test("STATUSLINE_CONFIG_DIR wins over CLAUDE_CONFIG_DIR when writing", () => {
+  withDir((claudeDir) => {
+    withDir((statuslineDir) => {
+      const res = run(claudeDir, ["options", "style=verbose"], {
+        STATUSLINE_CONFIG_DIR: statuslineDir,
+      });
+      assert.strictEqual(res.status, 0);
+      assert.strictEqual(readSettings(statuslineDir).style, "verbose");
+      // the write must not land in the lower-precedence dir at all
+      assert.ok(!fs.existsSync(settingsPath(claudeDir)));
+    });
+  });
+});
+
+test("an empty STATUSLINE_CONFIG_DIR reads as unset and falls through", () => {
+  // Matches the renderer's `[ -n "${VAR:-}" ]`, which skips an empty value.
+  withDir((claudeDir) => {
+    fs.writeFileSync(settingsPath(claudeDir), JSON.stringify({ style: "verbose" }));
+    const res = run(claudeDir, ["options", "--json"], { STATUSLINE_CONFIG_DIR: "" });
+    assert.strictEqual(res.status, 0);
+    assert.strictEqual(JSON.parse(res.stdout).style, "verbose");
+  });
+});
+
+test("CLAUDE_CONFIG_DIR still wins over ~/.claude", () => {
+  withDir((claudeDir) => {
+    withDir((fakeHome) => {
+      fs.mkdirSync(path.join(fakeHome, ".claude"));
+      fs.writeFileSync(
+        path.join(fakeHome, ".claude", ".statusline-settings"),
+        JSON.stringify({ style: "compact" })
+      );
+      fs.writeFileSync(settingsPath(claudeDir), JSON.stringify({ style: "verbose" }));
+      const res = run(claudeDir, ["options", "--json"], {
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+      });
+      assert.strictEqual(res.status, 0);
+      assert.strictEqual(JSON.parse(res.stdout).style, "verbose");
+    });
+  });
+});
+
+test("with neither env var set, the config dir is ~/.claude", () => {
+  withDir((fakeHome) => {
+    // CLAUDE_CONFIG_DIR="" is the fall-through, leaving the home fallback as the
+    // only remaining source — run() always pins CLAUDE_CONFIG_DIR otherwise.
+    const res = run(fakeHome, ["options", "style=verbose"], {
+      CLAUDE_CONFIG_DIR: "",
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+    });
+    assert.strictEqual(res.status, 0);
+    const written = path.join(fakeHome, ".claude", ".statusline-settings");
+    assert.ok(fs.existsSync(written), "settings should be written under ~/.claude");
+    assert.strictEqual(JSON.parse(fs.readFileSync(written, "utf8")).style, "verbose");
+  });
+});
+
+test("--self-check passes and is not hijacked by an ambient STATUSLINE_CONFIG_DIR", () => {
+  withDir((dir) => {
+    withDir((decoy) => {
+      // The check steers itself with CLAUDE_CONFIG_DIR; the higher-precedence var
+      // must not redirect its assertions (nor let it write into the decoy).
+      const res = run(dir, ["--self-check"], { STATUSLINE_CONFIG_DIR: decoy });
+      assert.strictEqual(res.status, 0, res.stderr);
+      assert.match(res.stdout, /self-check OK/);
+      assert.ok(!fs.existsSync(settingsPath(decoy)));
+    });
   });
 });

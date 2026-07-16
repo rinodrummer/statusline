@@ -58,6 +58,77 @@
 # - Git status, in order: ↑ ahead, ⊞ untracked (plus_square_o, green), ☑ staged-new (check_square_o, light
 #   green), ~ modified, - deleted, ✓ clean. Untracked precedes staged so the pair reads as the ?? -> A
 #   progression across `git add`.
+# - Config dir, in precedence order: `--config-dir <path>` (or `--config-dir=<path>`), $STATUSLINE_CONFIG_DIR,
+#   $CLAUDE_CONFIG_DIR, then a probe of $HOME/.claude followed by $USERPROFILE/.claude, falling back to
+#   $HOME/.claude. The first three are explicit and short-circuit the probe outright — an explicit dir is
+#   honoured whether or not the file being looked for exists there, so a profile with no badge reads as
+#   "no badge" rather than silently borrowing another dir's. Only the probe is per-file, and deliberately so:
+#   see resolve_config_dir below for why the five callers must not be collapsed into one shared dir.
+
+# --- Argument parsing ---------------------------------------------------------
+#
+# Claude Code invokes this script with no arguments and the session JSON on
+# stdin, so this loop is a no-op there and cannot disturb the read below. It runs
+# before `input=$(cat)` purely for readability; it consumes no stdin either way.
+# Unknown arguments are ignored rather than fatal: this renders a prompt, and
+# aborting on an argument a future Claude Code might pass would cost the user
+# their whole statusline over something cosmetic.
+_cli_config_dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-dir=*) _cli_config_dir="${1#--config-dir=}" ;;
+    --config-dir)   _cli_config_dir="${2:-}"; shift ;;
+    *) ;;
+  esac
+  shift
+done
+
+# --- Config dir resolution ----------------------------------------------------
+#
+# Resolves the config dir for ONE probe file, given as "$@" (several filenames
+# mean "any of these"; the first dir carrying any of them wins).
+#
+# Explicit sources — the --config-dir argument, then $STATUSLINE_CONFIG_DIR, then
+# $CLAUDE_CONFIG_DIR — win in that order and skip the probe entirely, so an
+# explicit dir is returned even when it holds none of the probe files. That is
+# what makes a profile's *absent* file read as absent instead of falling through
+# to another profile's copy of it.
+#
+# The probe fallback is per-file, and this function is therefore CALLED once per
+# call site rather than once overall. The $USERPROFILE branch exists for machines
+# carrying both a Linux $HOME/.claude and a Windows $USERPROFILE/.claude, and on
+# those the probe files have independent producers (statusline-settings.js,
+# caveman-activate.js, install.sh, create-statusline-badge.sh) that write at
+# different times to whichever side they run on. Nothing keeps them co-located.
+# Resolving one dir for all five would let the location of one file decide where
+# the other four are read from — settings found under $HOME would stop a caveman
+# flag living only under $USERPROFILE from ever being seen. Each file finds its
+# own dir; only the code is shared.
+resolve_config_dir() {
+  local _probe
+  if [ -n "$_cli_config_dir" ]; then
+    printf '%s' "$_cli_config_dir"; return
+  fi
+  if [ -n "${STATUSLINE_CONFIG_DIR:-}" ]; then
+    printf '%s' "$STATUSLINE_CONFIG_DIR"; return
+  fi
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    printf '%s' "$CLAUDE_CONFIG_DIR"; return
+  fi
+  for _probe in "$@"; do
+    if [ -f "$HOME/.claude/$_probe" ]; then
+      printf '%s' "$HOME/.claude"; return
+    fi
+  done
+  if [ -n "$USERPROFILE" ]; then
+    for _probe in "$@"; do
+      if [ -f "$USERPROFILE/.claude/$_probe" ]; then
+        printf '%s' "$USERPROFILE/.claude"; return
+      fi
+    done
+  fi
+  printf '%s' "$HOME/.claude"
+}
 
 input=$(cat)
 
@@ -84,16 +155,9 @@ input=$(cat)
 # nothing to clash with a byte the badge might legitimately contain. The badge is
 # read LAST for the same reason a badge is hard: it is the only value that could
 # itself contain a newline, and trailing garbage lines are harmless.
-_settings_dir="${CLAUDE_CONFIG_DIR:-}"
-if [ -z "$_settings_dir" ]; then
-  if [ -f "$HOME/.claude/.statusline-settings" ] || [ -f "$HOME/.claude/.statusline-style" ]; then
-    _settings_dir="$HOME/.claude"
-  elif [ -n "$USERPROFILE" ] && { [ -f "$USERPROFILE/.claude/.statusline-settings" ] || [ -f "$USERPROFILE/.claude/.statusline-style" ]; }; then
-    _settings_dir="$USERPROFILE/.claude"
-  else
-    _settings_dir="$HOME/.claude"
-  fi
-fi
+# Two probe files: either the consolidated settings or the legacy style flag
+# anchors the dir, since a machine on the legacy flag alone has no other marker.
+_settings_dir=$(resolve_config_dir .statusline-settings .statusline-style)
 _settings_file="$_settings_dir/.statusline-settings"
 _style_value=""
 _badge_value=""
@@ -572,16 +636,7 @@ else
 fi
 
 # Advisor indicator (read from Claude Code settings)
-_advisor_dir="${CLAUDE_CONFIG_DIR:-}"
-if [ -z "$_advisor_dir" ]; then
-  if [ -f "$HOME/.claude/settings.json" ]; then
-    _advisor_dir="$HOME/.claude"
-  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/settings.json" ]; then
-    _advisor_dir="$USERPROFILE/.claude"
-  else
-    _advisor_dir="$HOME/.claude"
-  fi
-fi
+_advisor_dir=$(resolve_config_dir settings.json)
 # Gated by sections.advisor: skip the settings.json read entirely when off.
 if section_enabled "$_sec_advisor" true; then
   advisor_model=$(jq -r '.advisorModel // ""' "$_advisor_dir/settings.json" 2>/dev/null | tr -d '[:space:]')
@@ -597,16 +652,7 @@ fi
 
 # Caveman mode indicator — reads flag written by caveman-activate.js
 caveman_part=""
-_caveman_dir="${CLAUDE_CONFIG_DIR:-}"
-if [ -z "$_caveman_dir" ]; then
-  if [ -f "$HOME/.claude/.caveman-active" ]; then
-    _caveman_dir="$HOME/.claude"
-  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/.caveman-active" ]; then
-    _caveman_dir="$USERPROFILE/.claude"
-  else
-    _caveman_dir="$HOME/.claude"
-  fi
-fi
+_caveman_dir=$(resolve_config_dir .caveman-active)
 # Gated by sections.caveman: skip the flag-file read entirely when off.
 if section_enabled "$_sec_caveman" true && [ -f "$_caveman_dir/.caveman-active" ]; then
   caveman_mode=$(tr -d '[:space:]' < "$_caveman_dir/.caveman-active" 2>/dev/null)
@@ -631,16 +677,7 @@ fi
 
 # Ponytail mode indicator — reads flag written by ponytail-activate hook
 ponytail_part=""
-_ponytail_dir="${CLAUDE_CONFIG_DIR:-}"
-if [ -z "$_ponytail_dir" ]; then
-  if [ -f "$HOME/.claude/.ponytail-active" ]; then
-    _ponytail_dir="$HOME/.claude"
-  elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/.ponytail-active" ]; then
-    _ponytail_dir="$USERPROFILE/.claude"
-  else
-    _ponytail_dir="$HOME/.claude"
-  fi
-fi
+_ponytail_dir=$(resolve_config_dir .ponytail-active)
 # Gated by sections.ponytail: skip the flag-file read entirely when off.
 if section_enabled "$_sec_ponytail" true && [ -f "$_ponytail_dir/.ponytail-active" ]; then
   ponytail_mode=$(tr -d '[:space:]' < "$_ponytail_dir/.ponytail-active" 2>/dev/null)
@@ -669,16 +706,7 @@ badge_part=""
 if [ -n "$_badge_value" ]; then
   badge_part="$_badge_value"
 else
-  _badge_dir="${CLAUDE_CONFIG_DIR:-}"
-  if [ -z "$_badge_dir" ]; then
-    if [ -f "$HOME/.claude/statusline-badge.txt" ]; then
-      _badge_dir="$HOME/.claude"
-    elif [ -n "$USERPROFILE" ] && [ -f "$USERPROFILE/.claude/statusline-badge.txt" ]; then
-      _badge_dir="$USERPROFILE/.claude"
-    else
-      _badge_dir="$HOME/.claude"
-    fi
-  fi
+  _badge_dir=$(resolve_config_dir statusline-badge.txt)
   [ -f "$_badge_dir/statusline-badge.txt" ] && badge_part=$(cat "$_badge_dir/statusline-badge.txt" 2>/dev/null)
 fi
 

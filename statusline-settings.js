@@ -5,8 +5,8 @@
  * Read, set, toggle and reset the statusline settings.
  *
  * Shared contract with the statusline renderer:
- *   Settings file: $CLAUDE_CONFIG_DIR/.statusline-settings
- *                  (default ~/.claude/.statusline-settings)
+ *   Settings file: $STATUSLINE_CONFIG_DIR or $CLAUDE_CONFIG_DIR, else
+ *                  ~/.claude/.statusline-settings
  *   JSON object, canonical shape:
  *     {
  *       "style": "compact"|"verbose",       // default "compact"
@@ -85,8 +85,9 @@
  *   it just needs the alias resolved on every read, whether or not it is rewritten.
  *
  * Cross-platform: Node.js built-ins only. Config dir resolves like the
- * statusline: CLAUDE_CONFIG_DIR if set, else ~/.claude (HOME, or USERPROFILE on
- * Windows-native).
+ * statusline: STATUSLINE_CONFIG_DIR, then CLAUDE_CONFIG_DIR, then ~/.claude
+ * (HOME, or USERPROFILE on Windows-native). See configDir below — that order is
+ * a contract with the renderer, not a local preference.
  */
 
 const fs = require("fs");
@@ -157,7 +158,30 @@ const USAGE = [
   "  which takes its value verbatim.",
 ].join("\n");
 
+// Resolves the config dir holding .statusline-settings.
+//
+// The precedence mirrors the renderer's resolve_config_dir: $STATUSLINE_CONFIG_DIR
+// (this tool's own override), then $CLAUDE_CONFIG_DIR (which Claude Code sets
+// itself), then ~/.claude. That agreement is the point, not a nicety: the renderer
+// and this helper are two independent readers/writers of ONE .statusline-settings,
+// so a dir resolved differently here makes `options` report settings that are not
+// the ones being rendered — the exact failure the schema contract exists to
+// prevent. A change to the order on either side must land on both.
+//
+// Truthiness rather than an `in process.env` check, deliberately: the renderer's
+// `[ -n "${VAR:-}" ]` treats VAR="" as unset and falls through to the next source,
+// and "" is falsy here, so both skip an empty value identically. Tightening this
+// into an explicit undefined check would silently split the two apart again.
+//
+// The renderer's fourth step — probing $HOME/.claude then $USERPROFILE/.claude for
+// the file — is intentionally NOT mirrored. It exists so a *reader* can find an
+// existing file on either side of a WSL/Windows split; this helper writes, and a
+// writer cannot probe for a file that does not exist yet. It resolves the one dir
+// it would create the file in instead.
 function configDir() {
+  if (process.env.STATUSLINE_CONFIG_DIR) {
+    return process.env.STATUSLINE_CONFIG_DIR;
+  }
   if (process.env.CLAUDE_CONFIG_DIR) {
     return process.env.CLAUDE_CONFIG_DIR;
   }
@@ -598,8 +622,36 @@ function migrateLegacySettings() {
 function selfCheck() {
   const assert = require("assert");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "statusline-settings-"));
+  // Clear the higher-precedence override before pinning the temp dir: this check
+  // steers itself with CLAUDE_CONFIG_DIR, so an ambient STATUSLINE_CONFIG_DIR
+  // would now outrank it and point every assertion below at the developer's real
+  // settings file.
+  delete process.env.STATUSLINE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = tmp;
   const read = () => readSettings();
+
+  // --- config dir resolution (contract with the renderer's resolve_config_dir) --
+  {
+    const a = fs.mkdtempSync(path.join(os.tmpdir(), "statusline-cfg-a-"));
+    const b = fs.mkdtempSync(path.join(os.tmpdir(), "statusline-cfg-b-"));
+    // STATUSLINE_CONFIG_DIR outranks CLAUDE_CONFIG_DIR
+    process.env.STATUSLINE_CONFIG_DIR = a;
+    process.env.CLAUDE_CONFIG_DIR = b;
+    assert.strictEqual(configDir(), a);
+    // an empty value reads as unset and falls through, as `[ -n "${VAR:-}" ]` does
+    process.env.STATUSLINE_CONFIG_DIR = "";
+    assert.strictEqual(configDir(), b);
+    // neither set: ~/.claude
+    delete process.env.STATUSLINE_CONFIG_DIR;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    assert.strictEqual(
+      configDir(),
+      path.join(os.homedir() || process.env.HOME || process.env.USERPROFILE, ".claude")
+    );
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+    process.env.CLAUDE_CONFIG_DIR = tmp;
+  }
   // defaults apply when the file is absent
   assert.deepStrictEqual(read(), defaults());
   assert.strictEqual(read().sections.seven_day, false);

@@ -16,7 +16,7 @@
 # unreliable. Line 1 carries model/context/5h/7d/badge, line 2 project/git/time.
 
 setup() {
-  SCRIPT="${BATS_TEST_DIRNAME}/../../.claude/statusline-command.sh"
+  SCRIPT="${BATS_TEST_DIRNAME}/../../statusline-command.sh"
   TMP="$(mktemp -d)"
   export CLAUDE_CONFIG_DIR="$TMP/config"
   export HOME="$TMP/home"
@@ -739,4 +739,149 @@ refute_double_space() {
 
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/.claude" ]
+}
+
+# --- Config-dir precedence ----------------------------------------------------
+#
+# Precedence: --config-dir > $STATUSLINE_CONFIG_DIR > $CLAUDE_CONFIG_DIR > probe
+# ($HOME/.claude, then $USERPROFILE/.claude).
+#
+# Every level gets a badge naming itself, so the rendered badge names the dir that
+# actually won — the assertion is on the resolution, not merely on the script
+# surviving. The badge is the signal on purpose: it is the one config value echoed
+# back to stdout verbatim, so it maps to a dir with no decoding.
+#
+# Each test populates EVERY level below the one under test, so a test can only
+# pass by preferring the right dir, never by it being the sole candidate. The
+# negative assertions are the point: without them a resolver returning the last
+# candidate standing would pass all of these.
+#
+# setup() does not unset STATUSLINE_CONFIG_DIR (nothing else reads it), so the
+# probe tests below clear it explicitly via `env -u` rather than trusting ambient.
+setup_precedence_dirs() {
+  CLI_DIR="$TMP/cli"
+  SL_DIR="$TMP/sl"
+  mkdir -p "$CLI_DIR" "$SL_DIR"
+  printf 'CLIBDG ' > "$CLI_DIR/statusline-badge.txt"
+  printf 'SLBDG '  > "$SL_DIR/statusline-badge.txt"
+  printf 'CCBDG '  > "$CLAUDE_CONFIG_DIR/statusline-badge.txt"
+  export STATUSLINE_CONFIG_DIR="$SL_DIR"
+}
+
+@test "config dir: --config-dir wins over STATUSLINE_CONFIG_DIR and CLAUDE_CONFIG_DIR" {
+  setup_precedence_dirs
+
+  run bash "$SCRIPT" --config-dir "$CLI_DIR" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLIBDG"* ]]
+  [[ "$output" != *"SLBDG"* ]]
+  [[ "$output" != *"CCBDG"* ]]
+}
+
+# The equals form is a separate branch of the parser from the space-separated
+# one, so it earns its own test rather than being assumed equivalent.
+@test "config dir: --config-dir=<path> is equivalent to --config-dir <path>" {
+  setup_precedence_dirs
+
+  run bash "$SCRIPT" "--config-dir=$CLI_DIR" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLIBDG"* ]]
+  [[ "$output" != *"SLBDG"* ]]
+  [[ "$output" != *"CCBDG"* ]]
+}
+
+@test "config dir: STATUSLINE_CONFIG_DIR wins over CLAUDE_CONFIG_DIR" {
+  setup_precedence_dirs
+
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SLBDG"* ]]
+  [[ "$output" != *"CCBDG"* ]]
+}
+
+# CLAUDE_CONFIG_DIR must still beat the probe: this is the path Claude Code drives
+# for every profile, and the one the refactor could most easily have inverted.
+@test "config dir: CLAUDE_CONFIG_DIR wins over the HOME probe" {
+  setup_precedence_dirs
+  unset STATUSLINE_CONFIG_DIR
+  mkdir -p "$HOME/.claude"
+  printf 'HOMEBDG ' > "$HOME/.claude/statusline-badge.txt"
+
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CCBDG"* ]]
+  [[ "$output" != *"HOMEBDG"* ]]
+}
+
+# The default: no arg, no env, so resolution walks the probe cascade to
+# $HOME/.claude — what Claude Code hits on a machine with no CLAUDE_CONFIG_DIR.
+# This is the case the byte-parity gate covers, pinned here as a unit test too.
+@test "config dir: no arg and no env resolves through the HOME probe" {
+  mkdir -p "$HOME/.claude"
+  printf 'HOMEBDG ' > "$HOME/.claude/statusline-badge.txt"
+
+  run env -u CLAUDE_CONFIG_DIR -u STATUSLINE_CONFIG_DIR bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HOMEBDG"* ]]
+}
+
+# The probe's second rung: with $HOME/.claude carrying no badge, resolution falls
+# through to $USERPROFILE/.claude. setup() unsets USERPROFILE, so this is the only
+# test where that branch can fire.
+@test "config dir: probe falls through to USERPROFILE when HOME lacks the file" {
+  mkdir -p "$HOME/.claude" "$TMP/userprofile/.claude"
+  printf 'UPBDG ' > "$TMP/userprofile/.claude/statusline-badge.txt"
+
+  run env -u CLAUDE_CONFIG_DIR -u STATUSLINE_CONFIG_DIR USERPROFILE="$TMP/userprofile" \
+    bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UPBDG"* ]]
+}
+
+# An explicit dir short-circuits the probe outright: a profile with no badge must
+# read as "no badge", never quietly inherit HOME's. This is what makes an explicit
+# dir mean "this profile" rather than "start searching here".
+@test "config dir: explicit dir without the file does not fall through to HOME" {
+  mkdir -p "$HOME/.claude"
+  printf 'HOMEBDG ' > "$HOME/.claude/statusline-badge.txt"
+
+  run bash "$SCRIPT" --config-dir "$CLAUDE_CONFIG_DIR" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"HOMEBDG"* ]]
+}
+
+# Each call site probes for its own file, so files in different dirs must resolve
+# independently — collapsing the five into one shared dir is the regression this
+# guards. The caveman flag lives only in HOME, the badge only in USERPROFILE: both
+# must render, which no single resolved dir could achieve.
+@test "config dir: probe resolves per-file, not once for all call sites" {
+  mkdir -p "$HOME/.claude" "$TMP/userprofile/.claude"
+  printf 'full' > "$HOME/.claude/.caveman-active"
+  printf 'UPBDG ' > "$TMP/userprofile/.claude/statusline-badge.txt"
+
+  run env -u CLAUDE_CONFIG_DIR -u STATUSLINE_CONFIG_DIR USERPROFILE="$TMP/userprofile" \
+    bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UPBDG"* ]]
+  [[ "$output" == *"🪨▄"* ]]
+}
+
+# Unknown arguments are ignored rather than fatal: a future Claude Code passing a
+# new flag must not cost the user their whole statusline over something cosmetic.
+# Asserting on the context run, not the model name — the name is colour-wrapped,
+# so the bracket and the "M" are never adjacent bytes.
+@test "config dir: unknown arguments are ignored, not fatal" {
+  run bash "$SCRIPT" --some-future-flag <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"42%"* ]]
+  [[ "$output" == *"/ 200K"* ]]
 }
