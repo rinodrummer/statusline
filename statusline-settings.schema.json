@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/rinodrummer/dotfiles/statusline-settings.schema.json",
+  "$id": "https://github.com/rinodrummer/statusline/statusline-settings.schema.json",
   "title": "Statusline Settings",
   "description": "Shape of $CLAUDE_CONFIG_DIR/.statusline-settings (default ~/.claude/.statusline-settings), the single config store shared by .claude/statusline-command.sh (the renderer) and scripts/claude/statusline-settings.js (the writer, fronted by /statusline-options). Editor autocomplete and test-time checks only: nothing validates against this at runtime, because a settings file that fails validation must still render a statusline rather than break the prompt. Both readers degrade silently to the defaults declared here instead.",
   "type": "object",
