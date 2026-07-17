@@ -27,7 +27,7 @@
 #   if `resets_at` is missing or non-numeric.
 # - Settings live in one consolidated JSON file, `.statusline-settings`, in the config dir (same cascade as
 #   the other flag files). Canonical shape (see statusline-settings.schema.json in the repo root):
-#     {"style": "compact"|"verbose", "badge": "<raw badge string>",
+#     {"style": "compact"|"verbose", "nerd_font": true, "badge": "<raw badge string>",
 #      "sections": {"context": true, "five_hour": true, "seven_day": false, "advisor": true, "effort": true,
 #                   "caveman": true, "ponytail": true, "git": true, "session_start_date": true, "agent": true}}
 #   Stored values are canonical: statusline-settings.js folds case on the way in (`style=VERBOSE`) and
@@ -55,9 +55,22 @@
 #   does NOT count as "set" (it falls through, so it can never mask a real badge file). Otherwise falls back
 #   to the dedicated `statusline-badge.txt` file in the same config dir, for machines not yet migrated onto
 #   the consolidated settings file.
-# - Git status, in order: ↑ ahead, ⊞ untracked (plus_square_o, green), ☑ staged-new (check_square_o, light
-#   green), ~ modified, - deleted, ✓ clean. Untracked precedes staged so the pair reads as the ?? -> A
-#   progression across `git add`.
+# - Git status, in order: ↑ ahead, ☑ staged-new (check_square_o, light green), ⊞ untracked (plus_square_o,
+#   green), ~ modified, - deleted, ✓ clean. Staged precedes untracked, mirroring porcelain's XY columns:
+#   index-side state first, working-tree state after.
+# - `nerd_font` (top-level, default true) declares whether the terminal has a Nerd Font. It is NOT a section:
+#   it hides nothing, it only picks which glyphs the git group draws with — which is why it sits beside
+#   `style` rather than under `sections`. Absent, empty or non-boolean all mean true, so existing files keep
+#   their icons. false swaps exactly the Private Use Area glyphs (U+E000-U+F8FF, the Nerd-Font-only
+#   codepoints that draw as a tofu box without the font) for ones any font has:
+#     ahead U+F176 -> ↑ (U+2191), staged-new U+F046 -> ^, untracked U+F196 -> +,
+#     modified U+F044 -> ~, deleted U+F147 -> -, and the group's leading branch icon U+E725 -> "git".
+#   The + / ^ / ↑ run is ordered as the lifecycle it describes: + new, ^ staged (rising), ↑ gone up.
+#   Ordinary Unicode is deliberately NOT degraded: ✓ clean is U+2713 (Dingbats) and ↑ is U+2191 (Arrows),
+#   both render without a Nerd Font, so ✓ is identical in both modes and ahead only loses its PUA form.
+#   Colours are identical in both modes — only the glyph changes. There is no auto-detection and must not be:
+#   font support is invisible from a terminal, and no TERM_PROGRAM/WT_SESSION heuristic can tell a real glyph
+#   from a tofu box, so the user declares it.
 # - Config dir, in precedence order: `--config-dir <path>` (or `--config-dir=<path>`), $STATUSLINE_CONFIG_DIR,
 #   $CLAUDE_CONFIG_DIR, then a probe of $HOME/.claude followed by $USERPROFILE/.claude, falling back to
 #   $HOME/.claude. The first three are explicit and short-circuit the probe outright — an explicit dir is
@@ -160,6 +173,7 @@ input=$(cat)
 _settings_dir=$(resolve_config_dir .statusline-settings .statusline-style)
 _settings_file="$_settings_dir/.statusline-settings"
 _style_value=""
+_nerd_font_value=""
 _badge_value=""
 _sec_agent=""
 _sec_context=""
@@ -181,6 +195,7 @@ if [ -f "$_settings_file" ]; then
     def section(name):
       if (.sections[name] | type) == "boolean" then (.sections[name] | tostring) else "" end;
     (.style // ""),
+    (if (.nerd_font | type) == "boolean" then (.nerd_font | tostring) else "" end),
     section("agent"),
     section("context"),
     section("five_hour"),
@@ -199,6 +214,7 @@ if [ -f "$_settings_file" ]; then
   ' "$_settings_file" 2>/dev/null)
   {
     IFS= read -r _style_value
+    IFS= read -r _nerd_font_value
     IFS= read -r _sec_agent
     IFS= read -r _sec_context
     IFS= read -r _sec_five_hour
@@ -504,13 +520,44 @@ if [ -n "$git_branch" ]; then
   modified=$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c '^.\?M')
   deleted=$(git -C "$cwd" status --porcelain 2>/dev/null | grep -c '^.\?D')
 
+  # Glyph set, chosen by nerd_font. The fallbacks replace exactly the Private Use
+  # Area glyphs (U+E000-U+F8FF) — the Nerd-Font-only codepoints that draw as a
+  # tofu box without the font. Ordinary Unicode is NOT degraded: ↑ (U+2191) and
+  # ✓ (U+2713) live in Arrows and Dingbats, render in any normal font, and are
+  # already the vocabulary this file's header uses for those two entries.
+  # The three-symbol run is ordered as the lifecycle it describes, left to right:
+  # + is new, ^ is staged (rising), ↑ is already gone up.
+  # Colours are identical in both sets — only the glyph changes, and each entry
+  # keeps its single trailing space so the `% }` trim below works either way.
+  #
+  # Compared against "false" exactly: absent, empty or non-boolean all mean true,
+  # which is what keeps every existing settings file rendering icons untouched.
+  # Stored values are canonical (statusline-settings.js normalises on write), so
+  # an exact match is deliberate here, as everywhere else in this file.
+  if [ "$_nerd_font_value" = "false" ]; then
+    _icon_ahead="\xe2\x86\x91"      # U+2191 ↑
+    _icon_added="^"
+    _icon_untracked="+"
+    _icon_modified="~"
+    _icon_deleted="-"
+    _icon_git="git"
+  else
+    _icon_ahead="\xef\x85\xb6"
+    _icon_added="\xef\x81\x86"
+    _icon_untracked="\xef\x86\x96"
+    _icon_modified="\xef\x81\x84"
+    _icon_deleted="\xef\x85\x87"
+    _icon_git="\xee\x9c\xa5"
+  fi
+
   git_status=""
-  [ "$ahead" -gt 0 ] 2>/dev/null && git_status+="\x1b[33m\xef\x85\xb6 ${ahead}\x1b[0m "
-  [ "$untracked" -gt 0 ] 2>/dev/null && git_status+="\x1b[32m\xef\x86\x96 ${untracked}\x1b[0m "
-  [ "$added" -gt 0 ] 2>/dev/null && git_status+="\x1b[38;5;120m\xef\x81\x86 ${added}\x1b[0m "
-  [ "$modified" -gt 0 ] 2>/dev/null && git_status+="\x1b[34m\xef\x81\x84 ${modified}\x1b[0m "
-  [ "$deleted" -gt 0 ] 2>/dev/null && git_status+="\x1b[31m\xef\x85\x87 ${deleted}\x1b[0m "
+  [ "$ahead" -gt 0 ] 2>/dev/null && git_status+="\x1b[33m${_icon_ahead} ${ahead}\x1b[0m "
+  [ "$added" -gt 0 ] 2>/dev/null && git_status+="\x1b[38;5;120m${_icon_added} ${added}\x1b[0m "
+  [ "$untracked" -gt 0 ] 2>/dev/null && git_status+="\x1b[32m${_icon_untracked} ${untracked}\x1b[0m "
+  [ "$modified" -gt 0 ] 2>/dev/null && git_status+="\x1b[34m${_icon_modified} ${modified}\x1b[0m "
+  [ "$deleted" -gt 0 ] 2>/dev/null && git_status+="\x1b[31m${_icon_deleted} ${deleted}\x1b[0m "
   git_status="${git_status% }"
+  # ✓ is U+2713 (Dingbats), not a Nerd Font glyph, so it is the same in both sets.
   [ -z "$git_status" ] && git_status="\x1b[32m\xe2\x9c\x93\x1b[0m"
   # Worktree info
   wt_name=$(echo "$input" | jq -r '.worktree.name // ""')
@@ -523,7 +570,7 @@ if [ -n "$git_branch" ]; then
   fi
 
   # Show repo name if it differs from both dir_name and project_name
-  git_icon="\xee\x9c\xa5"
+  git_icon="$_icon_git"
   if [ -n "$repo_name" ] && [ "$repo_name" != "$dir_name" ] && [ "$repo_name" != "$project_name" ]; then
     git_part=" (${git_icon} \x1b[33m${repo_name}\x1b[0m > \x1b[36m${git_branch}\x1b[0m > ${git_status})${worktree_part}"
   else

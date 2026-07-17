@@ -30,10 +30,14 @@ const DEFAULT_SECTIONS = {
   session_start_date: true,
   agent: true,
 };
+// nerd_font sits beside style, NOT under sections: it gates no group, it only
+// picks which glyphs the git status draws with. Its place in this literal is the
+// assertion — every deepStrictEqual below fails if it ever moves under sections.
 function defaults(overrides = {}) {
   const { sections, ...rest } = overrides;
   return {
     style: "compact",
+    nerd_font: true,
     sections: { ...DEFAULT_SECTIONS, ...sections },
     ...rest,
   };
@@ -1008,6 +1012,11 @@ test("schema declares the same keys and defaults the script implements", () => {
   }
   assert.deepStrictEqual(schema.properties.style.enum, ["compact", "verbose"]);
   assert.strictEqual(schema.properties.style.default, "compact");
+  // nerd_font is top-level and defaults true. additionalProperties is false, so
+  // omitting it from the schema would fail every file the script now writes.
+  assert.strictEqual(schema.properties.nerd_font.type, "boolean");
+  assert.strictEqual(schema.properties.nerd_font.default, true);
+  assert.ok(!("nerd_font" in sections), "nerd_font must not be a section");
   // agent is a section like any other, not a top-level tri-state.
   assert.ok(!("agent_mode" in schema.properties));
   // The badge must stay default-less: a default would make "absent" mean
@@ -1015,6 +1024,142 @@ test("schema declares the same keys and defaults the script implements", () => {
   assert.ok(!("default" in schema.properties.badge));
   assert.strictEqual(schema.additionalProperties, false);
   assert.strictEqual(schema.properties.sections.additionalProperties, false);
+});
+
+// --- nerd_font ---------------------------------------------------------------
+//
+// A top-level boolean, the first of its kind: style is top-level but an enum, and
+// every other boolean lives under sections. These tests pin it to that spot,
+// because "which category is it in" is the whole design decision — landing it
+// under sections would make it read as a visibility gate, which it is not.
+
+test("nerd_font defaults to true when the file is absent", () => {
+  withDir((dir) => {
+    const res = run(dir, ["options", "--json"]);
+    assert.strictEqual(res.status, 0, res.stderr);
+    assert.strictEqual(JSON.parse(res.stdout).nerd_font, true);
+  });
+});
+
+test("nerd_font=false is stored top-level, not under sections", () => {
+  withDir((dir) => {
+    const res = run(dir, ["options", "nerd_font=false"]);
+    assert.strictEqual(res.status, 0, res.stderr);
+    assert.deepStrictEqual(readSettings(dir), defaults({ nerd_font: false }));
+    assert.ok(!("nerd_font" in readSettings(dir).sections));
+  });
+});
+
+test("nerd_font round-trips through options and --json", () => {
+  withDir((dir) => {
+    run(dir, ["options", "nerd_font=false"]);
+    assert.strictEqual(JSON.parse(run(dir, ["options", "--json"]).stdout).nerd_font, false);
+    run(dir, ["options", "nerd_font=true"]);
+    assert.strictEqual(JSON.parse(run(dir, ["options", "--json"]).stdout).nerd_font, true);
+  });
+});
+
+test("nerd_font is reported by the human-readable options read", () => {
+  withDir((dir) => {
+    run(dir, ["options", "nerd_font=false"]);
+    assert.match(run(dir, ["options"]).stdout, /nerd_font: off/);
+    run(dir, ["options", "nerd_font=true"]);
+    assert.match(run(dir, ["options"]).stdout, /nerd_font: on/);
+  });
+});
+
+test("nerd_font takes the shared boolean vocabulary, case-insensitively", () => {
+  withDir((dir) => {
+    for (const [spelling, expected] of [
+      ["off", false],
+      ["ON", true],
+      ["0", false],
+      ["1", true],
+      ["False", false],
+    ]) {
+      const res = run(dir, ["options", `nerd_font=${spelling}`]);
+      assert.strictEqual(res.status, 0, res.stderr);
+      assert.strictEqual(readSettings(dir).nerd_font, expected, spelling);
+    }
+  });
+});
+
+test("nerd_font rejects a non-boolean and leaves the file untouched", () => {
+  withDir((dir) => {
+    run(dir, ["options", "nerd_font=false"]);
+    for (const bogus of ["yes", "maybe", "2", "compact", ""]) {
+      const res = run(dir, ["options", `nerd_font=${bogus}`]);
+      assert.notStrictEqual(res.status, 0, `nerd_font=${bogus} must fail`);
+      assert.strictEqual(readSettings(dir).nerd_font, false, "state must survive");
+    }
+  });
+});
+
+test("nerd_font is NOT reachable as sections.nerd_font", () => {
+  withDir((dir) => {
+    // The prefix is only honoured for names that really live under sections —
+    // the same rule that keeps "sections.style" an error.
+    const res = run(dir, ["options", "sections.nerd_font=false"]);
+    assert.notStrictEqual(res.status, 0);
+    assert.match(res.stderr, /invalid key/);
+    assert.ok(!fs.existsSync(settingsPath(dir)), "a rejected key must write nothing");
+  });
+});
+
+test("a settings file holding a non-boolean nerd_font degrades to the default", () => {
+  withDir((dir) => {
+    // The renderer's exact-match comparison and this reader must agree that only
+    // a real JSON boolean counts; the string "false" is not one.
+    fs.writeFileSync(settingsPath(dir), JSON.stringify({ nerd_font: "false" }));
+    assert.strictEqual(JSON.parse(run(dir, ["options", "--json"]).stdout).nerd_font, true);
+  });
+});
+
+test("--reset=nerd_font restores true and touches nothing else", () => {
+  withDir((dir) => {
+    run(dir, ["options", "nerd_font=false", "style=verbose", "git=false"]);
+    const res = run(dir, ["options", "--reset=nerd_font"]);
+    assert.strictEqual(res.status, 0, res.stderr);
+    assert.deepStrictEqual(
+      readSettings(dir),
+      defaults({ style: "verbose", sections: { git: false } })
+    );
+  });
+});
+
+test("a full reset restores nerd_font to true", () => {
+  withDir((dir) => {
+    run(dir, ["options", "nerd_font=false"]);
+    run(dir, ["options", "--reset"]);
+    assert.deepStrictEqual(readSettings(dir), defaults());
+  });
+});
+
+test("a full reset keeps nerd_font while carrying the badge through", () => {
+  withDir((dir) => {
+    run(dir, ["badge", PRINTF_BADGE]);
+    run(dir, ["options", "nerd_font=false"]);
+    run(dir, ["options", "--reset"]);
+    assert.deepStrictEqual(readSettings(dir), defaults({ badge: PRINTF_BADGE }));
+  });
+});
+
+test("nerd_font is listed in the usage key list", () => {
+  withDir((dir) => {
+    const res = run(dir, ["options", "bogus=1"]);
+    assert.match(res.stderr, /option keys:.*nerd_font/);
+  });
+});
+
+test("setting nerd_font preserves the other keys", () => {
+  withDir((dir) => {
+    run(dir, ["options", "style=verbose", "weekly=true"]);
+    run(dir, ["options", "nerd_font=false"]);
+    assert.deepStrictEqual(
+      readSettings(dir),
+      defaults({ style: "verbose", nerd_font: false, sections: { seven_day: true } })
+    );
+  });
 });
 
 test("schema still declares the superseded weekly alias", () => {

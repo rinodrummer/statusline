@@ -20,6 +20,7 @@ Keys, and what they accept:
 | Key | Values | Default |
 |---|---|---|
 | `style` | `compact`, `verbose` | `compact` |
+| `nerd_font` | `true`, `false` | `true` |
 | `agent` | `true`, `false` | `true` |
 | `context` | `true`, `false` | `true` |
 | `five_hour` | `true`, `false` | `true` |
@@ -35,9 +36,17 @@ Booleans accept `true`/`on`/`1` and `false`/`off`/`0`. Values are
 case-insensitive (`agent=TRUE`, `style=VERBOSE`) and stored canonically.
 
 Section keys may be spelled with their schema prefix (`sections.git`), which is
-what `--reset=sections.git,sections.clock` does. Keys themselves are
-case-sensitive. An invalid key or value aborts the whole batch — nothing is
+what `--reset=sections.git,sections.clock` does. `style` and `nerd_font` are not
+sections and take no prefix — `sections.nerd_font` is an error. Keys themselves
+are case-sensitive. An invalid key or value aborts the whole batch — nothing is
 written.
+
+Every key except `style` and `nerd_font` gates a section: `false` omits that
+group entirely. Those two change how things draw, not whether they draw.
+`nerd_font=false` draws the git icons with glyphs that need no Nerd Font (`↑`
+ahead, `^` staged, `+` untracked, `~` modified, `-` deleted, `git` leading the
+group); `✓` for a clean tree is ordinary Unicode and is unchanged. Same colours
+either way.
 
 **The badge is shown, not settable.** It appears in the read output and in
 `--json`, but `badge=...` and `--reset=badge` are rejected: the badge is profile

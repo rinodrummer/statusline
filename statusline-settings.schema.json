@@ -12,6 +12,11 @@
       "default": "compact",
       "description": "verbose spells the effort/caveman/ponytail indicators out as labels; compact renders them as badges."
     },
+    "nerd_font": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the terminal has a Nerd Font. false falls the git status icons back to glyphs any font has (↑ ahead, ^ staged-new, + untracked, ~ modified, - deleted, and \"git\" for the group's leading branch icon); the clean mark stays ✓ (U+2713), which is ordinary Unicode rather than a Nerd Font glyph and renders without one. Colours are identical in both modes — only the glyph changes. Top-level rather than a section because it hides nothing: it changes how a group draws, not whether it draws. Defaults true and is user-declared because font support is not detectable from a terminal; no TERM_PROGRAM/WT_SESSION heuristic can tell a real glyph from a tofu box."
+    },
     "weekly": {
       "type": "boolean",
       "default": false,

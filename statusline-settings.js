@@ -10,6 +10,7 @@
  *   JSON object, canonical shape:
  *     {
  *       "style": "compact"|"verbose",       // default "compact"
+ *       "nerd_font": true,                  // default true
  *       "badge": "<raw badge string>",      // no default
  *       "sections": {                       // every key a boolean
  *         "context": true, "five_hour": true, "seven_day": false,
@@ -99,6 +100,19 @@ const SCALAR_DEFAULTS = { style: "compact" };
 const VALID_VALUES = {
   style: ["compact", "verbose"],
 };
+// Boolean top-level keys — presentation, not visibility.
+//
+// nerd_font is NOT a section, deliberately: a `sections.*` key gates whether a
+// group renders at all, and this one hides nothing. It only changes which glyphs
+// the git status draws with, so it sits beside `style` (the other "how it looks"
+// key) rather than under `sections`. Filing it as a section would make
+// `git=false` and `nerd_font=false` read as the same kind of switch when one
+// deletes the group and the other merely redraws it.
+//
+// Defaults true because font support is not detectable from a terminal: no
+// TERM_PROGRAM/WT_SESSION heuristic can tell a Nerd Font from a tofu box, so the
+// user declares it. True keeps the icons for everyone who never touches it.
+const TOGGLE_DEFAULTS = { nerd_font: true };
 // Every togglable renderer section, with the default the renderer must agree on.
 // seven_day is the one opt-in section: a weekly bar most sessions do not want.
 const SECTION_DEFAULTS = {
@@ -122,7 +136,7 @@ const LEGACY_KEYS = ["style", "weekly", "badge"];
 
 // The full default config, freshly built each call so callers can mutate it.
 function defaults() {
-  return { ...SCALAR_DEFAULTS, sections: { ...SECTION_DEFAULTS } };
+  return { ...SCALAR_DEFAULTS, ...TOGGLE_DEFAULTS, sections: { ...SECTION_DEFAULTS } };
 }
 
 // User-facing option names -> canonical dotted paths. The command UX is flatter
@@ -140,6 +154,9 @@ const OPTION_PATHS = {
   weekly: "sections.seven_day",
   clock: "sections.session_start_date",
 };
+for (const toggle of Object.keys(TOGGLE_DEFAULTS)) {
+  OPTION_PATHS[toggle] = toggle;
+}
 for (const section of Object.keys(SECTION_DEFAULTS)) {
   OPTION_PATHS[section] = `sections.${section}`;
 }
@@ -243,6 +260,10 @@ function readSettings() {
 
   for (const key of Object.keys(SCALAR_DEFAULTS)) {
     if (VALID_VALUES[key].includes(parsed[key])) settings[key] = parsed[key];
+  }
+
+  for (const key of Object.keys(TOGGLE_DEFAULTS)) {
+    if (typeof parsed[key] === "boolean") settings[key] = parsed[key];
   }
 
   const sections =
@@ -366,6 +387,17 @@ function isSectionPath(dottedPath) {
   return dottedPath.startsWith("sections.");
 }
 
+// Every path holding a boolean: the sections, plus the top-level toggles. What
+// separates "parse this value as a boolean" from "parse it against an enum" is
+// the stored TYPE, not the position in the tree — so the set/toggle paths branch
+// on this rather than on isSectionPath, which only answers where a key lives.
+function isBooleanPath(dottedPath) {
+  return (
+    isSectionPath(dottedPath) ||
+    Object.prototype.hasOwnProperty.call(TOGGLE_DEFAULTS, dottedPath)
+  );
+}
+
 // Apply one name=value pair onto an in-memory settings object. Throws on an
 // unknown name or an invalid value, before anything is written.
 function applyAssignment(settings, name, rawValue) {
@@ -373,7 +405,7 @@ function applyAssignment(settings, name, rawValue) {
   if (rawValue === undefined || rawValue === "") {
     throw new Error(`${name} requires a value\n${USAGE}`);
   }
-  if (isSectionPath(dottedPath)) {
+  if (isBooleanPath(dottedPath)) {
     const parsed = parseBoolean(rawValue);
     if (parsed === undefined) {
       // "agent=auto" was the tri-state this key briefly had in review. It never
@@ -424,7 +456,7 @@ function toggleKey(name) {
   const dottedPath = resolvePath(name);
   const settings = readSettings();
   const current = getAtPath(settings, dottedPath);
-  if (isSectionPath(dottedPath)) return setKey(dottedPath, !current);
+  if (isBooleanPath(dottedPath)) return setKey(dottedPath, !current);
   const [first, second] = VALID_VALUES[dottedPath];
   return setKey(dottedPath, current === first ? second : first);
 }
@@ -552,6 +584,7 @@ function formatOptions(settings) {
   // listing would repaint the rest of the output.
   const lines = [
     `style: ${settings.style}`,
+    `nerd_font: ${settings.nerd_font ? "on" : "off"}`,
     `badge: ${settings.badge === undefined ? "(none)" : "set (via create-statusline-badge.sh)"}`,
     "sections:",
   ];
@@ -711,6 +744,14 @@ function selfCheck() {
   assert.strictEqual(read().sections.session_start_date, true);
   // options: a section name that is not one must not wear the sections. prefix
   assert.throws(() => applyOptions(["sections.style=verbose"]));
+  // nerd_font: a top-level boolean, default true, never reachable under sections
+  assert.strictEqual(defaults().nerd_font, true);
+  assert.strictEqual(applyOptions(["nerd_font=false"]).settings.nerd_font, false);
+  assert.strictEqual(parseSettingsFile().nerd_font, false, "stored top-level, not nested");
+  assert.throws(() => applyOptions(["sections.nerd_font=false"]));
+  assert.throws(() => applyOptions(["nerd_font=bogus"]));
+  applyReset(["nerd_font"]);
+  assert.strictEqual(read().nerd_font, true);
   // reset: selected keys only
   applyReset(["sections.git"]);
   assert.strictEqual(read().sections.git, true);

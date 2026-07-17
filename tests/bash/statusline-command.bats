@@ -625,7 +625,7 @@ refute_double_space() {
   [[ "${lines[1]}" != *$'\xef\x86\x96'* ]]
 }
 
-@test "untracked and staged together: both render, untracked before staged" {
+@test "untracked and staged together: both render, staged before untracked" {
   init_repo
   echo "a" > "$WORKDIR/staged.txt"
   git -C "$WORKDIR" add staged.txt
@@ -633,7 +633,7 @@ refute_double_space() {
   run bash "$SCRIPT" <<< "$(statusline_input)"
 
   [ "$status" -eq 0 ]
-  [[ "${lines[1]}" == *$'\e[32m\xef\x86\x96 1\e[0m \e[38;5;120m\xef\x81\x86 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[38;5;120m\xef\x81\x86 1\e[0m \e[32m\xef\x86\x96 1\e[0m'* ]]
 }
 
 @test "AM (staged then modified): still counts as staged" {
@@ -674,6 +674,146 @@ refute_double_space() {
 
   [ "$status" -eq 0 ]
   [[ "$output" != *$'\e[38;5;229m'* ]]
+}
+
+# --- nerd_font ----------------------------------------------------------------
+#
+# The switch replaces exactly the Private Use Area glyphs (U+E000-U+F8FF), the
+# ones that draw as a tofu box without a Nerd Font. ✓ (U+2713) and ↑ (U+2191) are
+# ordinary Unicode and are NOT degraded, so the negative assertions below hunt PUA
+# bytes specifically rather than "non-ASCII".
+#
+# Drives one repo into every tracked state at once, so a positional shift in the
+# settings parse (the jq list and the matching reads must stay in lockstep) shows
+# up as a wrong glyph rather than passing by luck on a single-icon fixture.
+dirty_repo_all_states() {
+  init_repo
+  echo "keep" > "$WORKDIR/mod.txt"
+  echo "gone" > "$WORKDIR/del.txt"
+  git -C "$WORKDIR" add mod.txt del.txt
+  git -C "$WORKDIR" -c user.email=test@example.com -c user.name=Test \
+    commit -q -m "base"
+  echo "changed" > "$WORKDIR/mod.txt"
+  rm "$WORKDIR/del.txt"
+  echo "new" > "$WORKDIR/staged.txt"
+  git -C "$WORKDIR" add staged.txt
+  echo "loose" > "$WORKDIR/untracked.txt"
+}
+
+@test "nerd_font=false: git status renders the no-Nerd-Font glyphs" {
+  write_settings '{"nerd_font":false}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[38;5;120m^ 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[32m+ 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[34m~ 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[31m- 1\e[0m'* ]]
+}
+
+@test "nerd_font=false: every fallback glyph is single-width and non-PUA" {
+  write_settings '{"nerd_font":false}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  # The criterion is not just "not PUA": a fallback in a poorly-covered block (⨣
+  # U+2A23, Supplemental Mathematical Operators) would still be tofu for the very
+  # users this serves, and a double-width emoji one (➕ U+2795) would break the
+  # column alignment. Neither may creep back in.
+  [[ "${lines[1]}" != *$'\xe2\xa8\xa3'* ]]  # U+2A23 ⨣
+  [[ "${lines[1]}" != *$'\xe2\x9e\x95'* ]]  # U+2795 ➕
+  # The retired letter form: the set is symbols, not letters.
+  [[ "${lines[1]}" != *$'\e[38;5;120mA 1\e[0m'* ]]
+}
+
+@test "nerd_font=false: no Private Use Area bytes anywhere in the git group" {
+  write_settings '{"nerd_font":false}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" != *$'\xef\x85\xb6'* ]]  # U+F176 ahead
+  [[ "${lines[1]}" != *$'\xef\x81\x86'* ]]  # U+F046 staged-new
+  [[ "${lines[1]}" != *$'\xef\x86\x96'* ]]  # U+F196 untracked
+  [[ "${lines[1]}" != *$'\xef\x81\x84'* ]]  # U+F044 modified
+  [[ "${lines[1]}" != *$'\xef\x85\x87'* ]]  # U+F147 deleted
+  [[ "${lines[1]}" != *$'\xee\x9c\xa5'* ]]  # U+E725 the group's leading branch icon
+  [[ "${lines[1]}" == *"git "* ]]
+}
+
+@test "nerd_font=false: ahead keeps ordinary Unicode ↑ rather than degrading to ASCII" {
+  write_settings '{"nerd_font":false}'
+  init_repo
+  # -u is the point: the ahead count is measured against @{upstream}, so a plain
+  # push would leave it unset and the count at 0.
+  git init -q --bare "$TMP/bare.git"
+  git -C "$WORKDIR" remote add origin "$TMP/bare.git"
+  git -C "$WORKDIR" push -q -u origin main
+  git -C "$WORKDIR" -c user.email=test@example.com -c user.name=Test \
+    commit -q --allow-empty -m "ahead"
+  # Guard the premise: without an upstream the ahead count is 0 and this proves nothing.
+  [ "$(git -C "$WORKDIR" rev-list --count @{upstream}..HEAD)" = "1" ]
+
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[33m\xe2\x86\x91 1\e[0m'* ]]
+  [[ "${lines[1]}" != *$'\xef\x85\xb6'* ]]
+}
+
+@test "nerd_font=false: clean tree still renders ✓, which is not a Nerd Font glyph" {
+  write_settings '{"nerd_font":false}'
+  init_repo
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[32m\xe2\x9c\x93\e[0m'* ]]
+}
+
+@test "nerd_font absent: defaults to true, Nerd Font glyphs still render" {
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[38;5;120m\xef\x81\x86 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[32m\xef\x86\x96 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[34m\xef\x81\x84 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\e[31m\xef\x85\x87 1\e[0m'* ]]
+  [[ "${lines[1]}" == *$'\xee\x9c\xa5'* ]]
+}
+
+@test "nerd_font=true: explicit true renders the Nerd Font glyphs" {
+  write_settings '{"nerd_font":true}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[38;5;120m\xef\x81\x86 1\e[0m'* ]]
+  [[ "${lines[1]}" != *$'\e[38;5;120m^ 1\e[0m'* ]]
+}
+
+@test "nerd_font non-boolean: degrades to the default rather than to ASCII" {
+  write_settings '{"nerd_font":"false"}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == *$'\e[38;5;120m\xef\x81\x86 1\e[0m'* ]]
+}
+
+@test "nerd_font=false: the other settings keys still land (no positional shift)" {
+  write_settings '{"nerd_font":false,"style":"verbose","sections":{"git":false}}'
+  dirty_repo_all_states
+  run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+
+  [ "$status" -eq 0 ]
+  # style=verbose reached its reader
+  [[ "$output" == *"effort:high"* ]]
+  # sections.git=false reached its reader: the whole git group is gone
+  [[ "${lines[1]}" != *"git "* ]]
+  [[ "${lines[1]}" != *$'\e[32m+ 1\e[0m'* ]]
 }
 
 # --- Context bar dual-mode ----------------------------------------------------

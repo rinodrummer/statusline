@@ -45,7 +45,7 @@ colour with the bar dominant.
 | | Needed for |
 |---|---|
 | **`jq`** | **Hard requirement.** The renderer parses its session JSON with it. Without `jq` there is no statusline. |
-| **A Nerd Font terminal** | The icons (folder, branch, clock). Without one they render as tofu boxes. Get one from [nerdfonts.com](https://www.nerdfonts.com/) and select it in your terminal. |
+| **A Nerd Font terminal** | The icons (folder, branch, clock). Without one they render as tofu boxes. Get one from [nerdfonts.com](https://www.nerdfonts.com/) and select it in your terminal — or set [`nerd_font=false`](#without-a-nerd-font), which falls the **git** icons back to glyphs any font has. |
 | `git` | The line-2 git group only. Everything else still renders without it. |
 | `node` | The settings helper and slash commands only. The statusline itself renders on its built-in defaults without Node. |
 | `bash` | Works on macOS's bash 3.2 — no bash 4+ syntax anywhere. |
@@ -116,9 +116,10 @@ Same thing without the slash command:
 node ~/.claude/scripts/claude/statusline-settings.js options weekly=true
 ```
 
-| Key | Values | Default | Gates |
+| Key | Values | Default | What it does |
 |---|---|---|---|
 | `style` | `compact`, `verbose` | `compact` | `verbose` spells the effort/caveman/ponytail indicators out as labels; `compact` renders them as badges. |
+| `nerd_font` | `true`/`false` | `true` | Whether your terminal has a Nerd Font. `false` draws the git icons with glyphs any font has — see [Without a Nerd Font](#without-a-nerd-font). Not a gate: it hides nothing, it only changes how the git group draws. |
 | `agent` | `true`/`false` | `true` | The agent label on line 1. |
 | `context` | `true`/`false` | `true` | The bar/percent/window run *inside* the model bracket. `false` still renders a bare `[Model]` — the model name has no gate of its own. |
 | `five_hour` | `true`/`false` | `true` | The `[5h]` group. |
@@ -135,10 +136,55 @@ Booleans accept `true`/`on`/`1` and `false`/`off`/`0`, case-insensitively
 value aborts the whole batch — nothing is written. A section set to `false` is
 omitted with no separator or double space left behind.
 
+Every key except `style` and `nerd_font` is a section: it gates one renderable
+group, and `false` omits it. `style` and `nerd_font` gate nothing — they change
+how things draw, not whether they draw.
+
 A missing, unreadable, or malformed settings file degrades silently to the
 defaults above. That is deliberate: a bad config file must still render a
 statusline rather than break your prompt. Nothing validates the schema at
 runtime.
+
+### Without a Nerd Font
+
+The git status icons are [Nerd Font](https://www.nerdfonts.com/) glyphs, which
+live in Unicode's Private Use Area. Without the font installed they render as
+tofu boxes (`□`). If you cannot install one, turn the icons off:
+
+```sh
+/statusline-options nerd_font=false
+```
+
+The git group then draws with characters any ordinary font has:
+
+The Nerd Font column is given as codepoints on purpose — printed here as glyphs,
+it would be tofu boxes for exactly the readers this section is for.
+
+| | `nerd_font=true` | `nerd_font=false` |
+|---|---|---|
+| branch (leads the group) | U+E725 | `git` |
+| ahead | U+F176 | `↑` |
+| staged (new file) | U+F046 | `^` |
+| untracked | U+F196 | `+` |
+| modified | U+F044 | `~` |
+| deleted | U+F147 | `-` |
+| clean | `✓` U+2713 | `✓` (unchanged) |
+
+Colours are identical in both modes — only the glyph changes. The table is in
+render order; read `+` → `^` → `↑` and they describe the lifecycle of a change:
+`+` is new, `^` is staged (rising), `↑` is already gone up.
+
+Only the Private Use Area glyphs are swapped, not everything non-ASCII: `✓`
+(U+2713) and `↑` (U+2191) are ordinary Unicode that renders without a Nerd Font,
+so `✓` is the same in both modes and `↑` is a real arrow rather than a caret.
+
+There is no auto-detection, and that is deliberate: a terminal cannot be asked
+which fonts it has, and nothing in `TERM_PROGRAM` or `WT_SESSION` distinguishes a
+real glyph from a tofu box. So you declare it. The default is `true`, which keeps
+the icons for everyone who never touches this.
+
+This setting covers the **git** icons. The context-warning and clock icons are
+Nerd Font glyphs too and are not currently affected by it.
 
 ### The badge
 
