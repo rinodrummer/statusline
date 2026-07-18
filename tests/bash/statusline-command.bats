@@ -1025,3 +1025,28 @@ setup_precedence_dirs() {
   [[ "$output" == *"42%"* ]]
   [[ "$output" == *"/ 200K"* ]]
 }
+
+# --- Git locks ----------------------------------------------------------------
+
+# `git status` takes .git/index.lock to refresh the index, and this script runs on
+# every render against whatever repo the user is in — so a render can race, and
+# fail, the user's own `git pull`. GIT_OPTIONAL_LOCKS=0 opts out. Asserted on the
+# environment git actually receives, via a PATH shim, rather than on the source
+# text: an `export` the child never inherits would pass a grep and fail in life.
+@test "git: child git processes run with GIT_OPTIONAL_LOCKS=0" {
+  init_repo
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/git" <<SHIM
+#!/bin/bash
+printf '%s\n' "\${GIT_OPTIONAL_LOCKS-unset}" >> "$TMP/locks.log"
+exec /usr/bin/env -u PATH PATH="$PATH" $(command -v git) "\$@"
+SHIM
+  chmod +x "$TMP/bin/git"
+
+  PATH="$TMP/bin:$PATH" run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [ -s "$TMP/locks.log" ]
+  # Every invocation, not just the first: one unguarded call is enough to race.
+  ! grep -qv '^0$' "$TMP/locks.log"
+}
