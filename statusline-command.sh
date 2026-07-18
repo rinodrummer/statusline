@@ -78,6 +78,14 @@
 #   "no badge" rather than silently borrowing another dir's. Only the probe is per-file, and deliberately so:
 #   see resolve_config_dir below for why the five callers must not be collapsed into one shared dir.
 
+# Every `git` call below is read-only, but `git status` still takes .git/index.lock
+# to refresh the index — and this script runs on every render, against whatever repo
+# the user is sitting in. That collides with their own work: a `git pull` racing a
+# render dies with "Unable to create '.git/index.lock': File exists". Rendering a
+# prompt must never be able to fail someone's git command, so opt out of the
+# optional locks entirely; the counters below read the same either way.
+export GIT_OPTIONAL_LOCKS=0
+
 # --- Argument parsing ---------------------------------------------------------
 #
 # Claude Code invokes this script with no arguments and the session JSON on
