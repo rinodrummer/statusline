@@ -44,11 +44,11 @@ colour with the bar dominant.
 
 | | Needed for |
 |---|---|
-| **`jq`** | **Hard requirement.** The renderer parses its session JSON with it. Without `jq` there is no statusline. |
+| **`jq`** | **Hard requirement.** The renderer parses its session JSON with it. Without `jq` there is no statusline. `apt install jq` / `brew install jq` / `winget install jqlang.jq`. |
 | **A Nerd Font terminal** | The icons (folder, branch, clock). Without one they render as tofu boxes. Get one from [nerdfonts.com](https://www.nerdfonts.com/) and select it in your terminal — or set [`nerd_font=false`](#without-a-nerd-font), which falls the **git** icons back to glyphs any font has. |
 | `git` | The line-2 git group only. Everything else still renders without it. |
 | `node` | The settings helper and slash commands only. The statusline itself renders on its built-in defaults without Node. |
-| `bash` | Works on macOS's bash 3.2 — no bash 4+ syntax anywhere. |
+| `bash` | Works on macOS's bash 3.2 — no bash 4+ syntax anywhere. On Windows you need a bash environment: WSL, Git Bash, MSYS2 or Cygwin — see [Windows](#windows). |
 
 **Line endings matter.** This repo ships a `.gitattributes` forcing LF on shell
 scripts. If you clone on Windows with `core.autocrlf=true` and lose it, the
@@ -92,6 +92,91 @@ $CONFIG_DIR/scripts/claude/statusline-settings.js    # the settings helper
 $CONFIG_DIR/commands/statusline-*.md                 # the slash commands
 $CONFIG_DIR/settings.json                            # statusLine.command patched in
 ```
+
+### Windows
+
+The renderer is a bash script, so what Windows needs is a **bash environment** —
+something providing a POSIX shell and the usual utilities. Any of these will do,
+and `./install.sh` detects which one you are in:
+
+| Environment | `uname -s` | How the statusline is wired |
+|---|---|---|
+| **WSL / WSL2** | `Linux` | POSIX: `bash <path>` |
+| **Git Bash** (ships with [Git for Windows](https://gitforwindows.org/)) | `MINGW64_NT-*` | Windows: absolute `bash.exe` path |
+| **MSYS2** | `MSYS_NT-*` / `MINGW64_NT-*` | Windows: absolute `bash.exe` path |
+| **Cygwin** | `CYGWIN_NT-*` | Windows: absolute `bash.exe` path |
+
+Git Bash is the easiest if you already have Git installed; WSL is the closest to a
+real Linux. Pick either.
+
+**Your terminal emulator is a separate question and does not matter here.** mintty
+(what Git Bash, MSYS2 and Cygwin open by default), Windows Terminal, ConEmu,
+WezTerm — any of them runs the statusline, because the emulator draws characters
+and the bash environment above is what *executes* the script. The emulator only
+decides whether the Nerd Font icons and the ANSI colours look right, which is a
+font setting, not a compatibility one. If the icons come out as tofu boxes, see
+[Without a Nerd Font](#without-a-nerd-font).
+
+**MinGW-w64 on its own is not a bash environment.** It is a *compiler toolchain* —
+headers, import libraries and tools that, paired with GCC or LLVM, build native
+Windows binaries. It ships no shell, so there is nothing there to run this script.
+The `MINGW64` in a Git Bash or MSYS2 prompt is easy to misread as MinGW-w64 doing
+the work: it is an MSYS2 **environment name**, saying which toolchain's
+`/mingw64/bin` is on `PATH`. The shell in that window is MSYS2's bash, and that is
+what actually runs the statusline. So "MINGW64 works" is true, but only because a
+MINGW64 window *is* Git Bash or MSYS2 — installing MinGW-w64 alone gets you
+nowhere.
+
+#### Windows-only details
+
+`./install.sh` handles all of these. They are worth knowing anyway, because each
+one fails *silently* if you wire things up by hand.
+
+**Install `jq` first.** Git Bash ships without it; MSYS2 and Cygwin have it in
+their own package managers (`pacman -S jq`, or the Cygwin setup GUI). Otherwise:
+
+```sh
+winget install jqlang.jq    # or: scoop install jq / choco install jq
+```
+
+Then reopen your shell so `jq.exe` is on `PATH`.
+
+**`bash` is not a command on Windows.** Claude Code on Windows is a native build:
+it hands `statusLine.command` to `cmd.exe`, not to the shell you installed from.
+Git for Windows only adds its `cmd` directory to `PATH`, which holds `git.exe`
+and no shell — while
+`C:\Windows\System32\bash.exe`, the WSL launcher, *is* on `PATH` on Windows 10 and
+11 whether or not a distribution is installed. So the ordinary POSIX spelling
+
+```json
+{ "statusLine": { "command": "bash /c/Users/you/.claude/statusline-command.sh" } }
+```
+
+does not fail loudly — it quietly hands your statusline to WSL, which answers with
+an error on stderr and nothing on stdout. A blank statusline is what you see. The
+installer writes the absolute form instead:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "\"C:/Program Files/Git/bin/bash.exe\" \"C:/Users/you/.claude/statusline-command.sh\""
+  }
+}
+```
+
+Both halves are Windows paths with forward slashes, quoted for `cmd.exe`. If you
+installed before this was handled, just re-run `./install.sh` — it recognises its
+own previous command and rewrites it in place, no `--force` needed.
+
+**If you were on an older version and everything looked switched off** — no
+context bar, no git group, no clock, just `[Model] 📂 dir` — that was a third
+Windows-only bug, now fixed: `jq.exe` ends its lines with CRLF, and the stray
+carriage return made every section read as disabled the moment a
+`.statusline-settings` file existed. Pull and re-run `./install.sh`.
+
+**On WSL, none of this applies.** There `uname` says Linux, Claude Code and the
+shell agree on POSIX paths, and the plain `bash <path>` spelling is correct.
 
 ## Configuring it
 

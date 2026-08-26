@@ -49,6 +49,30 @@ Every script is `#!/bin/bash`, and macOS ships bash 3.2 — so bash 4+ syntax br
 `sed -i` also differs between GNU and BSD. Prefer a temp file and a copy over in-place editing.
 </important>
 
+<important if="you are touching the `statusLine.command` string install.sh writes, or anything that assumes POSIX paths at runtime">
+
+There are **two host platforms, not one**, and they differ in who runs the command:
+
+- POSIX (Linux, macOS, **WSL**): Claude Code and the shell agree. `bash <posix-path>`, `printf %q`-quoted. Unchanged.
+- **Git Bash / MSYS2 / Cygwin** (`uname -s` = `MINGW*`/`MSYS*`/`CYGWIN*`): Claude Code is the *native Windows* build and hands the string to **cmd.exe**. `install.sh` writes `"<win-path-to-bash.exe>" "<win-path-to-renderer>"` — both via `cygpath -m`, both in cmd's quoting, not POSIX's (`printf %q` emits backslash escapes cmd passes through literally).
+
+Why the bare word `bash` is not merely wrong there but **silently** wrong: Git for Windows puts only its `cmd` dir on `PATH` (git.exe, no shell), while `C:\Windows\System32\bash.exe` — the WSL launcher — is on `PATH` by default on Windows 10/11 regardless of whether a distro exists. So `bash <path>` resolves, runs, prints an error on stderr and nothing on stdout. The install reports success and the statusline is blank. Any future change here must keep the two spellings distinct.
+
+`windows_bash_path` probes its two bash.exe candidates **twice, in two spellings**, and both passes are load-bearing:
+
+- `win_to_posix` (the drive-letter form, `/c/...`) is deliberately not `cygpath -u`: the MSYS mount table aliases `/bin` onto `/usr/bin`, so `cygpath -u` collapses the two candidates and the `-f` probe inspects the wrong file. Only the drive-letter form can tell them apart — which matters because plain MSYS2 has no top-level `bin` at all.
+- `cygpath -u` is then the fallback, and it is the pass that finds anything **on Cygwin**, where drives are mounted at `/cygdrive/c` and the drive-letter form matches nothing. Safe as a second pass only: on MSYS the first pass has already returned, and Cygwin has no separate `usr/bin` on disk so its first candidate is the right answer.
+
+`<root>/bin/bash.exe` is preferred over `<root>/usr/bin/bash.exe` because on Git for Windows it is the launcher, which sets `MSYSTEM=MINGW64` and so puts `/mingw64/bin` (git) on `PATH`.
+
+The renderer itself needs no platform branch, but two Windows facts constrain it:
+
+- **`jq.exe` writes CRLF.** It opens stdout in text mode, so every line it emits ends `\r\n`. `$(...)` hides this — MSYS bash strips one trailing CR off a command substitution — but **`read` does not**, so the `.statusline-settings` positional block (the only `read` in the renderer) must strip CR before parsing. Getting this wrong is silent and total: an *absent* section key arrives as `"\r"`, which is non-empty, so `section_enabled` never reaches its default and reads it as false. Every section switches off the moment a settings file exists. Any new `read` of jq output needs the same guard. Covered by the `crlf_jq_shim` tests.
+- **MSYS accepts backslash paths, jq does not.** `basename`, `test -f` and `git -C` all handle `D:\git\x`, so the renderer needs no conversion — but anything splitting a path *inside a jq filter* must fold `\` to `/` first (see `added_dirs`). Claude Code on Windows sends `cwd`, `transcript_path` and `added_dirs` in Windows form.
+
+`tests/bash/install.bats` covers this; its Windows cases `skip` unless the suite is itself running under MSYS/Cygwin, so a green run on Linux proves nothing about that branch.
+</important>
+
 <important if="you are touching the badge, or the `badge` subcommand's name or arguments">
 
 Badge precedence in the renderer: the `badge` key in `.statusline-settings` wins whenever it is present and non-empty; empty or absent falls back to the superseded `statusline-badge.txt`. So anything writing a badge must write the **key** — writing only the `.txt` while a `badge` key exists leaves the new badge silently ignored, because the fallback is never reached.
@@ -91,4 +115,6 @@ The destinations are a contract, not an implementation detail: `<config-dir>/sta
 `node --test` needs the glob (`tests/js/*.test.js`), not the bare directory — pointing it at `tests/js` fails to resolve the module under test.
 
 Fixture repos should pin `core.autocrlf false`: a contributor with `autocrlf=true` globally otherwise makes any line-ending assertion non-deterministic.
+
+**`@test` names must be ASCII.** bats encodes each name into a shell function name, and under MSYS/Git Bash the multibyte round-trip breaks: bats reports `unknown test name` and the test never runs — dropped from the count rather than failed, so the suite looks green while three tests did nothing. Spell a glyph under test as its codepoint in the title (`U+2191`, `U+2713`), never as the character.
 </important>

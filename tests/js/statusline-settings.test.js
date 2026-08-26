@@ -752,7 +752,14 @@ test("write leaves no temp artifact in the config dir", () => {
   });
 });
 
-test("write preserves the permissions of an existing settings file", () => {
+// Skipped on native Windows: NTFS has no POSIX mode bits, so fs.chmodSync can
+// only flip the read-only attribute and the mode always reads back as 0o666 or
+// 0o444. There is nothing here to preserve and nothing to assert — the invariant
+// itself is POSIX-only, not the test. Node reports "win32" even when the suite is
+// driven from Git Bash, which is exactly the case this skip is for.
+test("write preserves the permissions of an existing settings file", {
+  skip: process.platform === "win32" ? "POSIX mode bits do not exist on Windows" : false,
+}, () => {
   withDir((dir) => {
     run(dir, ["style", "verbose"]);
     // Rename swaps in a brand-new inode, so its mode has to be carried over —
