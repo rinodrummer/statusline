@@ -14,6 +14,12 @@
 # Assertions are on byte patterns observed from real runs (cat -A), not on what
 # the source appears to emit: the escape-heavy output makes eyeballed expectations
 # unreliable. Line 1 carries model/context/5h/7d/badge, line 2 project/git/time.
+#
+# Keep @test names ASCII-only. bats encodes each name into a shell function name,
+# and under MSYS/Git Bash the multibyte round-trip does not survive: the test is
+# reported as `bats: unknown test name` and never runs at all — silently dropping
+# it from the count rather than failing. Spell glyphs under test as codepoints in
+# the title (U+2191, U+2713); the assertions below use the real bytes.
 
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../../statusline-command.sh"
@@ -743,7 +749,7 @@ dirty_repo_all_states() {
   [[ "${lines[1]}" == *"git "* ]]
 }
 
-@test "nerd_font=false: ahead keeps ordinary Unicode ↑ rather than degrading to ASCII" {
+@test "nerd_font=false: ahead keeps ordinary Unicode U+2191 rather than degrading to ASCII" {
   write_settings '{"nerd_font":false}'
   init_repo
   # -u is the point: the ahead count is measured against @{upstream}, so a plain
@@ -763,7 +769,7 @@ dirty_repo_all_states() {
   [[ "${lines[1]}" != *$'\xef\x85\xb6'* ]]
 }
 
-@test "nerd_font=false: clean tree still renders ✓, which is not a Nerd Font glyph" {
+@test "nerd_font=false: clean tree still renders U+2713, which is not a Nerd Font glyph" {
   write_settings '{"nerd_font":false}'
   init_repo
   run bash "$SCRIPT" <<< "$(statusline_input)"
@@ -851,7 +857,7 @@ dirty_repo_all_states() {
   [[ "$output" == *$'\e[38;5;210m'* ]]
 }
 
-@test "1M model at 19% (190K tokens): uncoloured — absolute tokens, not percentage" {
+@test "1M model at 19% (190K tokens): uncoloured, on absolute tokens not percentage" {
   run bash "$SCRIPT" <<< "$(context_input 19 1000000)"
 
   [ "$status" -eq 0 ]
@@ -1012,6 +1018,57 @@ setup_precedence_dirs() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"UPBDG"* ]]
   [[ "$output" == *"🪨▄"* ]]
+}
+
+# --- Windows: jq.exe writes CRLF ----------------------------------------------
+#
+# jq on Windows opens stdout in text mode, so every line it emits ends CRLF. The
+# single-value reads elsewhere survive it because MSYS bash strips one trailing CR
+# off a command substitution, but the settings block is read with `read`, which
+# does not — and there the CR is not cosmetic: an absent section key arrives as
+# "\r" rather than "", which is non-empty, so section_enabled never reaches its
+# default and evaluates the key as false. Every section switches itself off the
+# moment a .statusline-settings file exists.
+#
+# The shim CRLFs only the settings read, not every jq call: on a POSIX host the
+# other call sites have no MSYS strip behind them, so a global shim would fail for
+# a reason this test is not about.
+crlf_jq_shim() {
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/jq" <<SHIM
+#!/bin/bash
+for _arg in "\$@"; do
+  case "\$_arg" in
+    *.statusline-settings) $(command -v jq) "\$@" | sed 's/\$/\r/'; exit ;;
+  esac
+done
+exec $(command -v jq) "\$@"
+SHIM
+  chmod +x "$TMP/bin/jq"
+}
+
+@test "settings: CRLF from jq does not switch every section off" {
+  crlf_jq_shim
+  write_settings '{"style":"verbose"}'
+
+  PATH="$TMP/bin:$PATH" run bash "$SCRIPT" <<< "$(statusline_input ',"effort":{"level":"high"}')"
+
+  [ "$status" -eq 0 ]
+  # style reached its reader despite the CR...
+  [[ "$output" == *"effort:high"* ]]
+  # ...and sections.context, absent from the file, still defaults to on.
+  [[ "$output" == *"42%"* ]]
+}
+
+@test "settings: CRLF from jq does not leave a stray CR in the badge" {
+  crlf_jq_shim
+  write_settings '{"badge":"BDG "}'
+
+  PATH="$TMP/bin:$PATH" run bash "$SCRIPT" <<< "$(statusline_input)"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BDG "* ]]
+  [[ "$output" != *$'\r'* ]]
 }
 
 # Unknown arguments are ignored rather than fatal: a future Claude Code passing a

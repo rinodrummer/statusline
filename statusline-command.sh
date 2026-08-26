@@ -220,6 +220,22 @@ if [ -f "$_settings_file" ]; then
     section("session_start_date"),
     (.badge // "")
   ' "$_settings_file" 2>/dev/null)
+  # jq.exe on Windows writes its stdout in text mode, so every one of the lines
+  # above arrives terminated by CRLF rather than LF. `$(...)` hides that for the
+  # single-value reads elsewhere in this script — MSYS bash strips one trailing CR
+  # off a command substitution — but `read` does not, and this is the only place
+  # that reads. Left in, the CR rides along on every value: `_style_value` becomes
+  # "verbose\r" and never equals "verbose", and worse, an *absent* section key
+  # arrives as "\r" instead of "", which is non-empty, so section_enabled skips its
+  # default and evaluates it as false. The visible result on Git Bash is a
+  # statusline stripped down to `[Model] (folder) dir` — every section off, style
+  # stuck on compact — the moment a .statusline-settings file exists at all.
+  #
+  # Stripped here rather than per-variable so the positional list stays a list, and
+  # by parameter expansion rather than `tr -d '\r'` to keep a process off a path
+  # that runs on every render. No legitimate value can contain a CR: the badge is a
+  # single line by construction, and everything else is an enum or a boolean.
+  _settings_parsed="${_settings_parsed//$'\r'/}"
   {
     IFS= read -r _style_value
     IFS= read -r _nerd_font_value
@@ -485,7 +501,13 @@ fi
 dir_name=$(basename "$cwd")
 
 # Added dirs (extra directories in workspace)
-added_dirs=$(echo "$input" | jq -r '.workspace.added_dirs // [] | map(split("/") | last) | join(", ")' 2>/dev/null)
+#
+# Backslashes are folded to slashes before the split because Claude Code running
+# natively on Windows sends Windows paths ("D:\\git\\dotfiles"). Splitting those
+# on "/" alone yields one element, so `last` returns the whole path and the line
+# prints "D:\git\dotfiles" where every other platform prints "dotfiles". basename
+# needs no such help — MSYS's accepts either separator — but jq is not MSYS.
+added_dirs=$(echo "$input" | jq -r '.workspace.added_dirs // [] | map(gsub("\\\\"; "/") | split("/") | last) | join(", ")' 2>/dev/null)
 if [ -n "$added_dirs" ]; then
   added_dirs_part=" + \x1b[2;34m${added_dirs}\x1b[0m"
 else
