@@ -175,8 +175,28 @@ Windows-only bug, now fixed: `jq.exe` ends its lines with CRLF, and the stray
 carriage return made every section read as disabled the moment a
 `.statusline-settings` file existed. Pull and re-run `./install.sh`.
 
-**On WSL, none of this applies.** There `uname` says Linux, Claude Code and the
-shell agree on POSIX paths, and the plain `bash <path>` spelling is correct.
+**If you run Claude Code inside WSL, none of this applies.** There `uname` says
+Linux, Claude Code and the shell agree on POSIX paths, and the plain
+`bash <path>` spelling is correct.
+
+#### Claude Code on Windows, renderer in WSL
+
+A third arrangement, and a common one: Claude Code is the native Windows build,
+but `statusLine.command` shells into WSL —
+
+```json
+{ "statusLine": { "command": "wsl bash -c '~/.claude/statusline-command.sh'" } }
+```
+
+Supported, and nothing to configure. Worth knowing what it used to look like when
+it went wrong, because the symptom pointed at the wrong thing: Claude Code sends
+`cwd` as a Windows path (`D:\git\project`), which under WSL does not exist —
+`/mnt/d/git/project` is the same directory under the only name Linux knows. So
+`git -C` failed, and the **whole line-2 git group disappeared while
+`/statusline-options` still reported `git: on`**. The folder name showed as the
+full `D:\git\project` for the same reason. The renderer now translates those
+paths, leaving them alone when they already resolve — which is what keeps Git
+Bash, where `D:\git\project` is valid, untouched.
 
 ## Configuring it
 

@@ -1107,3 +1107,34 @@ SHIM
   # Every invocation, not just the first: one unguarded call is enough to race.
   ! grep -qv '^0$' "$TMP/locks.log"
 }
+
+# --- Windows paths reaching a POSIX renderer ----------------------------------
+#
+# Claude Code running natively on Windows sends cwd as "D:\git\project" even when
+# statusLine.command shells into WSL to render. Under WSL that path does not
+# exist — /mnt/d/git/project is the same directory under the only name Linux
+# knows — so `git -C` fails, project_root and git_branch come out empty, and the
+# entire line-2 git group vanishes while sections.git still reads as on.
+#
+# Driven through a wslpath shim rather than a real WSL mount so the test means the
+# same thing on every platform: the drive letter is one that cannot resolve, which
+# is what sends the path down the translation branch, and the shim maps it onto
+# this test's actual repo. Asserting the git group *renders* is the point — the
+# folder name alone would pass on MSYS even with the fix reverted, since basename
+# there already splits backslashes.
+@test "windows cwd: an unresolvable drive-letter path is translated, git group survives" {
+  init_repo
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/wslpath" <<SHIM
+#!/bin/bash
+printf '%s\n' "$WORKDIR"
+SHIM
+  chmod +x "$TMP/bin/wslpath"
+
+  PATH="$TMP/bin:$PATH" run bash "$SCRIPT" <<< '{"model":{"display_name":"M"},"cwd":"X:\\nope\\repo","context_window":{"used_percentage":42,"context_window_size":200000}}'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"main"* ]]
+  [[ "$output" == *"$(basename "$WORKDIR")"* ]]
+  [[ "$output" != *'X:'* ]]
+}

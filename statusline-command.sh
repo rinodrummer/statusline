@@ -276,6 +276,57 @@ exceeds_200k=$(echo "$input" | jq -r '.exceeds_200k_tokens // false')
 transcript_path=$(echo "$input" | jq -r '.transcript_path // ""')
 context_size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
 
+# --- Windows paths from a native-Windows Claude Code --------------------------
+#
+# Claude Code on Windows sends `cwd` and `transcript_path` as Windows paths
+# ("D:\git\project"). Whether that needs translating depends on where THIS script
+# is running, which is not the same question as where Claude Code is running:
+#
+#   - Git Bash / MSYS2 / Cygwin: no translation. The emulation layer accepts a
+#     drive-letter path verbatim, so `git -C 'D:\git\x'` and `[ -f 'C:\...' ]`
+#     both just work.
+#   - WSL: translation, and it is not optional. D:\git\x does not exist under
+#     Linux — /mnt/d/git/x is the same directory under the only name WSL knows.
+#     Untranslated, `git -C` fails, project_root and git_branch come out empty,
+#     and the WHOLE line-2 git group silently disappears while sections.git still
+#     reads as on. `[ -f "$transcript_path" ]` fails the same way, taking the
+#     clock group with it. This is the common setup for anyone running Claude
+#     Code natively on Windows with `statusLine.command` shelling into WSL.
+#
+# The `[ -e ]` test is what separates the two without sniffing the platform: a
+# drive-letter path that already resolves is left exactly as it came in, so the
+# emulation-layer case costs nothing and cannot be broken by this. Only a path
+# that does NOT resolve is handed to wslpath — which is also the right answer for
+# a *nonexistent* directory on MSYS, since translating one changes nothing that
+# was going to work anyway.
+#
+# wslpath is preferred over building /mnt/<drive>/ by hand because the mount root
+# is configurable (`automount.root` in /etc/wsl.conf); the manual form is the
+# fallback for a WSL without it, and for the default layout the two agree.
+windows_path_to_local() {
+  case "$1" in
+    [A-Za-z]:[\\/]*) ;;
+    *) printf '%s' "$1"; return ;;
+  esac
+  if [ -e "$1" ]; then
+    printf '%s' "$1"; return
+  fi
+  local _translated
+  if command -v wslpath >/dev/null 2>&1; then
+    _translated=$(wslpath -u "$1" 2>/dev/null)
+    if [ -n "$_translated" ]; then
+      printf '%s' "$_translated"; return
+    fi
+  fi
+  # D:\git\x -> /mnt/d/git/x. Bash 3.2-safe: tr rather than ${var,,}.
+  printf '/mnt/%s%s' \
+    "$(printf '%s' "${1%%:*}" | tr '[:upper:]' '[:lower:]')" \
+    "$(printf '%s' "${1#*:}" | tr '\\' '/')"
+}
+
+cwd=$(windows_path_to_local "$cwd")
+transcript_path=$(windows_path_to_local "$transcript_path")
+
 # Format context size (e.g. 200000 => 200K, 1000000 => 1M, 1000000000 => 1B)
 if [ "$context_size" -ge 1000000000 ] 2>/dev/null; then
   context_fmt="$((context_size / 1000000000))B"
